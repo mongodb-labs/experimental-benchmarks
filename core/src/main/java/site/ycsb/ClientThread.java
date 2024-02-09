@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2010-2016 Yahoo! Inc., 2017 YCSB contributors All rights reserved.
+ * Copyright (c) 2023 - 2024 benchANT GmbH. All rights reserved.
  * <p>
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
@@ -37,7 +38,7 @@ public class ClientThread implements Runnable {
   private long opcount;
   private double targetOpsPerMs;
 
-  private int opsdone;
+  private long opsdone;
   private int threadid;
   private int threadcount;
   private Object workloadstate;
@@ -81,7 +82,7 @@ public class ClientThread implements Runnable {
     threadcount = threadCount;
   }
 
-  public int getOpsDone() {
+  public long getOpsDone() {
     return opsdone;
   }
 

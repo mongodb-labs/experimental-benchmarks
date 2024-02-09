@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2010 - 2016 Yahoo! Inc. All rights reserved.
+ * Copyright 2023-2024 benchANT GmbH. All Rights Reserved.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License"); you 
  * may not use this file except in compliance with the License. You
@@ -32,6 +33,13 @@ import java.util.Properties;
  */
 public final class JdbcDBCreateTable {
 
+  
+  /** The name of the property for the number of fields in a record. */
+  public static final String FIELD_COUNT_PROPERTY = "fieldcount";
+
+  /** Default number of fields in a record. */
+  public static final String FIELD_COUNT_PROPERTY_DEFAULT = "10";
+
   private static void usageMessage() {
     System.out.println("Create Table Client. Options:");
     System.out.println("  -p   key=value properties defined.");
@@ -41,12 +49,12 @@ public final class JdbcDBCreateTable {
   }
 
   private static void createTable(Properties props, String tablename) throws SQLException {
-    String driver = props.getProperty(JdbcDBClient.DRIVER_CLASS);
-    String username = props.getProperty(JdbcDBClient.CONNECTION_USER);
-    String password = props.getProperty(JdbcDBClient.CONNECTION_PASSWD, "");
-    String url = props.getProperty(JdbcDBClient.CONNECTION_URL);
-    int fieldcount = Integer.parseInt(props.getProperty(JdbcDBClient.FIELD_COUNT_PROPERTY,
-        JdbcDBClient.FIELD_COUNT_PROPERTY_DEFAULT));
+    String driver = props.getProperty(JdbcDBConstants.DRIVER_CLASS);
+    String username = props.getProperty(JdbcDBConstants.CONNECTION_USER);
+    String password = props.getProperty(JdbcDBConstants.CONNECTION_PASSWD, "");
+    String url = props.getProperty(JdbcDBConstants.CONNECTION_URL);
+    int fieldcount = Integer.parseInt(props.getProperty(FIELD_COUNT_PROPERTY,
+        FIELD_COUNT_PROPERTY_DEFAULT));
 
     if (driver == null || username == null || url == null) {
       throw new SQLException("Missing connection information.");
@@ -204,7 +212,7 @@ public final class JdbcDBCreateTable {
     }
 
     if (fieldcount > 0) {
-      props.setProperty(JdbcDBClient.FIELD_COUNT_PROPERTY, String.valueOf(fieldcount));
+      props.setProperty(FIELD_COUNT_PROPERTY, String.valueOf(fieldcount));
     }
 
     try {

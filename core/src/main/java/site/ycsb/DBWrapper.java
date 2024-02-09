@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2010 Yahoo! Inc., 2016-2020 YCSB contributors. All rights reserved.
+ * Copyright (c) 2023 - 2024 benchANT GmbH. All rights reserved.
  * <p>
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
@@ -17,9 +18,10 @@
 
 package site.ycsb;
 
-import java.util.Map;
-
 import site.ycsb.measurements.Measurements;
+import site.ycsb.wrappers.Comparison;
+import site.ycsb.wrappers.DatabaseField;
+
 import org.apache.htrace.core.TraceScope;
 import org.apache.htrace.core.Tracer;
 
@@ -31,9 +33,9 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * Also reports latency separately between OK and failed operations.
  */
 public class DBWrapper extends DB {
-  private final DB db;
-  private final Measurements measurements;
-  private final Tracer tracer;
+  protected final DB db;
+  protected final Measurements measurements;
+  protected final Tracer tracer;
 
   private boolean reportLatencyForEachError = false;
   private Set<String> latencyTrackedErrors = new HashSet<String>();
@@ -53,7 +55,14 @@ public class DBWrapper extends DB {
   private final String scopeStringScan;
   private final String scopeStringUpdate;
 
-  public DBWrapper(final DB db, final Tracer tracer) {
+  public static DBWrapper createWrapper(final DB db, final Tracer tracer) {
+    if(db instanceof IndexableDB) {
+      return new IndexableDbWrapper(db, tracer);
+    }
+    return new DBWrapper(db, tracer);
+  }
+
+  protected DBWrapper(final DB db, final Tracer tracer) {
     this.db = db;
     measurements = Measurements.getMeasurements();
     this.tracer = tracer;
@@ -170,7 +179,7 @@ public class DBWrapper extends DB {
     }
   }
 
-  private void measure(String op, Status result, long intendedStartTimeNanos,
+  protected final void measure(String op, Status result, long intendedStartTimeNanos,
                        long startTimeNanos, long endTimeNanos) {
     String measurementName = op;
     if (result == null || !result.isOk()) {
@@ -219,8 +228,7 @@ public class DBWrapper extends DB {
    * @param values A HashMap of field/value pairs to insert in the record
    * @return The result of the operation.
    */
-  public Status insert(String table, String key,
-                       Map<String, ByteIterator> values) {
+  public Status insert(String table, String key, List<DatabaseField> values) {
     try (final TraceScope span = tracer.newScope(scopeStringInsert)) {
       long ist = measurements.getIntendedStartTimeNs();
       long st = System.nanoTime();
@@ -247,6 +255,42 @@ public class DBWrapper extends DB {
       long en = System.nanoTime();
       measure("DELETE", res, ist, st, en);
       measurements.reportStatus("DELETE", res);
+      return res;
+    }
+  }
+}
+
+final class IndexableDbWrapper extends DBWrapper implements IndexableDB {
+  private final String scopeStringFindOne;
+  private final String scopeStringUpdateOne;
+
+  IndexableDbWrapper(final DB db, final Tracer tracer) {
+    super(db, tracer);
+    final String simple = db.getClass().getSimpleName();
+    scopeStringFindOne = simple + "#findone";
+    scopeStringUpdateOne = simple + "#updateone";
+  }
+  @Override
+  public Status findOne(String table, List<Comparison> filters, Set<String> fields, Map<String, ByteIterator> result) {
+    try (final TraceScope span = tracer.newScope(scopeStringFindOne)) {
+      long ist = measurements.getIntendedStartTimeNs();
+      long st = System.nanoTime();
+      Status res = ((IndexableDB) db).findOne(table, filters, fields, result);
+      long en = System.nanoTime();
+      measure("FINDONE", res, ist, st, en);
+      measurements.reportStatus("FINDONE", res);
+      return res;
+    }
+  }
+  @Override
+  public Status updateOne(String table, List<Comparison> filters, List<DatabaseField> fields) {
+    try (final TraceScope span = tracer.newScope(scopeStringUpdateOne)) {
+      long ist = measurements.getIntendedStartTimeNs();
+      long st = System.nanoTime();
+      Status res = ((IndexableDB) db).updateOne(table, filters, fields);
+      long en = System.nanoTime();
+      measure("UPDATEONE", res, ist, st, en);
+      measurements.reportStatus("UPDATEONE", res);
       return res;
     }
   }

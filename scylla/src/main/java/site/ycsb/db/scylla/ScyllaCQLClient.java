@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2020 YCSB contributors. All rights reserved.
+ * Copyright 2023-2024 benchANT GmbH. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you may not
  * use this file except in compliance with the License. You may obtain a copy of
@@ -15,21 +16,13 @@
  */
 package site.ycsb.db.scylla;
 
-import com.datastax.driver.core.*;
-import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
-import com.datastax.driver.core.policies.LoadBalancingPolicy;
-import com.datastax.driver.core.policies.TokenAwarePolicy;
-import com.datastax.driver.core.querybuilder.*;
-import site.ycsb.ByteArrayByteIterator;
-import site.ycsb.ByteIterator;
-import site.ycsb.DB;
-import site.ycsb.DBException;
-import site.ycsb.Status;
-
 import java.nio.ByteBuffer;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.Set;
 import java.util.Vector;
 import java.util.concurrent.ConcurrentHashMap;
@@ -41,68 +34,84 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.slf4j.helpers.MessageFormatter;
 
+import com.datastax.driver.core.BatchStatement;
+import com.datastax.driver.core.BatchStatement.Type;
+import com.datastax.driver.core.BoundStatement;
+import com.datastax.driver.core.Cluster;
+import com.datastax.driver.core.ColumnDefinitions;
+import com.datastax.driver.core.ConsistencyLevel;
+import com.datastax.driver.core.Host;
+import com.datastax.driver.core.HostDistance;
+import com.datastax.driver.core.Metadata;
+import com.datastax.driver.core.PreparedStatement;
+import com.datastax.driver.core.ResultSet;
+import com.datastax.driver.core.Row;
+import com.datastax.driver.core.Session;
+import com.datastax.driver.core.Statement;
+import com.datastax.driver.core.UDTValue;
+import com.datastax.driver.core.UserType;
+import com.datastax.driver.core.policies.DCAwareRoundRobinPolicy;
+import com.datastax.driver.core.policies.LoadBalancingPolicy;
+import com.datastax.driver.core.policies.TokenAwarePolicy;
+import com.datastax.driver.core.querybuilder.Delete;
+import com.datastax.driver.core.querybuilder.QueryBuilder;
+import com.datastax.driver.core.querybuilder.Select;
+import com.datastax.driver.core.querybuilder.Update;
+import com.datastax.driver.core.schemabuilder.SchemaBuilder;
+import com.datastax.driver.core.schemabuilder.SchemaStatement;
+
+import site.ycsb.ByteArrayByteIterator;
+import site.ycsb.ByteIterator;
+import site.ycsb.DB;
+import site.ycsb.DBException;
+import site.ycsb.IndexableDB;
+import site.ycsb.Status;
+import site.ycsb.workloads.core.CoreConstants;
+import site.ycsb.wrappers.Comparison;
+import site.ycsb.wrappers.DataWrapper;
+import site.ycsb.wrappers.DatabaseField;
+
+import static site.ycsb.db.scylla.ScyllaDbConstants.*;
+
 /**
  * Scylla DB implementation.
  */
-public class ScyllaCQLClient extends DB {
-
+public class ScyllaCQLClient extends DB implements IndexableDB {
+  static class IndexDescriptor {
+    String name;
+    List<String> columnNames = new ArrayList<>();
+  }
   private static final Logger LOGGER = LoggerFactory.getLogger(ScyllaCQLClient.class);
 
   private static Cluster cluster = null;
-  private static Session session = null;
+  static Session session = null;
 
   private static final ConcurrentMap<Set<String>, PreparedStatement> READ_STMTS = new ConcurrentHashMap<>();
   private static final ConcurrentMap<Set<String>, PreparedStatement> SCAN_STMTS = new ConcurrentHashMap<>();
-  private static final ConcurrentMap<Set<String>, PreparedStatement> INSERT_STMTS = new ConcurrentHashMap<>();
   private static final ConcurrentMap<Set<String>, PreparedStatement> UPDATE_STMTS = new ConcurrentHashMap<>();
   private static final AtomicReference<PreparedStatement> READ_ALL_STMT = new AtomicReference<>();
   private static final AtomicReference<PreparedStatement> SCAN_ALL_STMT = new AtomicReference<>();
   private static final AtomicReference<PreparedStatement> DELETE_STMT = new AtomicReference<>();
 
-  private static ConsistencyLevel readConsistencyLevel = ConsistencyLevel.QUORUM;
-  private static ConsistencyLevel writeConsistencyLevel = ConsistencyLevel.QUORUM;
+  private static ConsistencyLevel readConsistencyLevel;
+  static ConsistencyLevel writeConsistencyLevel;
 
-  private static boolean lwt = false;
+  static boolean lwt = false;
 
-  public static final String YCSB_KEY = "y_id";
-  public static final String KEYSPACE_PROPERTY = "scylla.keyspace";
-  public static final String KEYSPACE_PROPERTY_DEFAULT = "ycsb";
-  public static final String USERNAME_PROPERTY = "scylla.username";
-  public static final String PASSWORD_PROPERTY = "scylla.password";
-
-  public static final String HOSTS_PROPERTY = "scylla.hosts";
-  public static final String PORT_PROPERTY = "scylla.port";
-  public static final String PORT_PROPERTY_DEFAULT = "9042";
-
-  public static final String READ_CONSISTENCY_LEVEL_PROPERTY = "scylla.readconsistencylevel";
-  public static final String READ_CONSISTENCY_LEVEL_PROPERTY_DEFAULT = readConsistencyLevel.name();
-  public static final String WRITE_CONSISTENCY_LEVEL_PROPERTY = "scylla.writeconsistencylevel";
-  public static final String WRITE_CONSISTENCY_LEVEL_PROPERTY_DEFAULT = writeConsistencyLevel.name();
-
-  public static final String MAX_CONNECTIONS_PROPERTY = "scylla.maxconnections";
-  public static final String CORE_CONNECTIONS_PROPERTY = "scylla.coreconnections";
-  public static final String CONNECT_TIMEOUT_MILLIS_PROPERTY = "scylla.connecttimeoutmillis";
-  public static final String READ_TIMEOUT_MILLIS_PROPERTY = "scylla.readtimeoutmillis";
-
-  public static final String SCYLLA_LWT = "scylla.lwt";
-
-  public static final String TOKEN_AWARE_LOCAL_DC = "scylla.local_dc";
-
-  public static final String TRACING_PROPERTY = "scylla.tracing";
-  public static final String TRACING_PROPERTY_DEFAULT = "false";
-
-  public static final String USE_SSL_CONNECTION = "scylla.useSSL";
-  private static final String DEFAULT_USE_SSL_CONNECTION = "false";
-
+  /** The batch size to use for inserts. */
+  private static int batchSize;
+  private static boolean useTypedFields;
+  static String keyspace;
+  private BatchStatement batch = null;
+        
   /**
    * Count the number of times initialized to teardown on the last
    * {@link #cleanup()}.
    */
   private static final AtomicInteger INIT_COUNT = new AtomicInteger(0);
 
-  private static boolean debug = false;
-
-  private static boolean trace = false;
+  static boolean debug = false;
+  static boolean trace = false;
 
   /**
    * Initialize any state for this DB. Called once per DB instance; there is one
@@ -114,6 +123,7 @@ public class ScyllaCQLClient extends DB {
     // Keep track of number of calls to init (for later cleanup)
     INIT_COUNT.incrementAndGet();
 
+    batch = new BatchStatement(Type.UNLOGGED);
     // Synchronized so that we only have a single
     // cluster/session instance for all the threads.
     synchronized (INIT_COUNT) {
@@ -124,7 +134,8 @@ public class ScyllaCQLClient extends DB {
       }
 
       try {
-
+        // Set insert batchsize, default 1 - to be YCSB-original equivalent
+        batchSize = Integer.parseInt(getProperties().getProperty("batchsize", "1"));
         debug = Boolean.parseBoolean(getProperties().getProperty("debug", "false"));
         trace = Boolean.parseBoolean(getProperties().getProperty(TRACING_PROPERTY, TRACING_PROPERTY_DEFAULT));
 
@@ -138,7 +149,7 @@ public class ScyllaCQLClient extends DB {
         String username = getProperties().getProperty(USERNAME_PROPERTY);
         String password = getProperties().getProperty(PASSWORD_PROPERTY);
 
-        String keyspace = getProperties().getProperty(KEYSPACE_PROPERTY, KEYSPACE_PROPERTY_DEFAULT);
+        keyspace = getProperties().getProperty(KEYSPACE_PROPERTY, KEYSPACE_PROPERTY_DEFAULT);
 
         readConsistencyLevel = ConsistencyLevel.valueOf(
             getProperties().getProperty(READ_CONSISTENCY_LEVEL_PROPERTY, READ_CONSISTENCY_LEVEL_PROPERTY_DEFAULT));
@@ -216,9 +227,12 @@ public class ScyllaCQLClient extends DB {
               discoveredHost.getDatacenter(), discoveredHost.getEndPoint().resolve().getAddress(),
               discoveredHost.getRack());
         }
-
-        session = cluster.connect(keyspace);
-
+        boolean initDb = "true".equalsIgnoreCase(getProperties().getProperty(INIT_TABLE, "false"));
+        if(!initDb) {
+          session = cluster.connect(keyspace);
+        } else {
+          session = ScyllaDbInitHelper.createKeyspaceAndSchema(getProperties(), keyspace, cluster);
+        }
         if (Boolean.parseBoolean(getProperties().getProperty(SCYLLA_LWT, Boolean.toString(lwt)))) {
           LOGGER.info("Using LWT\n");
           lwt = true;
@@ -227,14 +241,38 @@ public class ScyllaCQLClient extends DB {
         } else {
           LOGGER.info("Not using LWT\n");
         }
-
         LOGGER.info("Read consistency: {}, Write consistency: {}\n",
             readConsistencyLevel.name(),
             writeConsistencyLevel.name());
       } catch (Exception e) {
         throw new DBException(e);
       }
+      useTypedFields = "true".equalsIgnoreCase(getProperties().getProperty(TYPED_FIELDS_PROPERTY));
+      List<IndexDescriptor> indexes = ScyllaDbInitHelper.getIndexList(getProperties());
+      setIndexes(getProperties(), indexes);
     } // synchronized
+  }
+  private void setIndexes(Properties props, List<IndexDescriptor> indexes) {
+    if(indexes.size() == 0) {
+      return;
+    }
+    System.err.println("indexes: " + indexes.get(0).columnNames);
+    final String table = props.getProperty(CoreConstants.TABLENAME_PROPERTY, CoreConstants.TABLENAME_PROPERTY_DEFAULT);
+    for(IndexDescriptor idx : indexes) {
+      if(idx.columnNames.size() < 1) continue;
+      if(idx.columnNames.size() > 1) {
+        LOGGER.error("found multiple columns in index. this is not supported by scylla");
+        System.exit(-2);
+      }
+      SchemaStatement ss = SchemaBuilder.createIndex(idx.name)
+        .ifNotExists().onTable(keyspace, table)
+        .andColumn(idx.columnNames.get(0));
+      ResultSet rs = session.execute(ss);
+      boolean applied = rs.wasApplied();
+      List<Row> results = rs.all();
+      LOGGER.info("created index: " + idx + ": " + results.toString() + "/" + applied);
+    }
+    System.err.println("created indexes");
   }
 
   /**
@@ -246,9 +284,9 @@ public class ScyllaCQLClient extends DB {
     synchronized (INIT_COUNT) {
       final int curInitCount = INIT_COUNT.decrementAndGet();
       if (curInitCount <= 0) {
+        ScyllaStatementHandler.cleanup();
         READ_STMTS.clear();
         SCAN_STMTS.clear();
-        INSERT_STMTS.clear();
         UPDATE_STMTS.clear();
         READ_ALL_STMT.set(null);
         SCAN_ALL_STMT.set(null);
@@ -522,6 +560,85 @@ public class ScyllaCQLClient extends DB {
     return Status.ERROR;
   }
 
+  private void addLegacyFieldsToInsertStatement(ColumnDefinitions vars, List<DatabaseField> fields, BoundStatement boundStmt) {
+    for(DatabaseField f : fields) {
+      boundStmt.setString(f.getFieldname(), f.getContent().asIterator().toString());
+    }
+  }
+  private static Set<?> arrayWrapperToSet(List<DataWrapper> wList) {
+    // explicitly untyped as we do not know the types yet
+    Set<Object> retVal = new HashSet<>();
+    for(DataWrapper w : wList) {
+      if(w.isTerminal()) {
+        if(w.isLong()) {
+          retVal.add(w.asLong());
+        } else if(w.isInteger()) {
+          retVal.add(w.asInteger());
+        } else if(w.isString()) {
+          retVal.add(w.asString());
+        }
+      } else if (w.isArray()) {
+        throw new UnsupportedOperationException("arrays of arrays are not supported (yet)");
+      } else if(w.isNested()) {
+        throw new UnsupportedOperationException("arrays of non-primitive objects are not supported (yet)");
+      }
+    }
+    return retVal;
+  }
+  private static UDTValue nestingToUdt(String fieldName, List<DatabaseField> nesting) {
+    UserType myUserType = cluster.getMetadata().getKeyspace(keyspace).getUserType(fieldName);
+    UDTValue udtValue = myUserType.newValue();
+    for(DatabaseField f : nesting) {
+      String name = f.getFieldname();
+      DataWrapper w = f.getContent();
+      if(w.isTerminal()) {
+        if(w.isLong()) {
+          udtValue.setLong(name, w.asLong());
+        } else if(w.isInteger()) {
+          udtValue.setInt(name, w.asInteger());
+        } else if(w.isString()) {
+          udtValue.setString(name, w.asString());
+        }
+      } else if (w.isArray()) {
+        throw new UnsupportedOperationException("UDTs with arrays are not supported (yet)");
+      } else if(w.isNested()) {
+        throw new UnsupportedOperationException("nested objects with nested are not supported (yet)");
+      }
+    }
+    return udtValue;
+  }
+  private static void addTypedFieldsToInsertStatement(List<DatabaseField> fields, BoundStatement boundStmt) {
+    for(DatabaseField f : fields) {
+      String name = f.getFieldname();
+      DataWrapper w = f.getContent();
+      if(w.isTerminal()) {
+        if(w.isLong()) {
+          boundStmt.setLong(name, w.asLong());
+        } else if(w.isInteger()) {
+          boundStmt.setInt(name, w.asInteger());
+        } else if(w.isString()) {
+          boundStmt.setString(name, w.asString());
+        } else {
+          // assuming this is an iterator
+          // which is the only remaining terminal
+          Object o = w.asObject();
+          byte[] b = (byte[]) o;
+          boundStmt.setString(name, new String(b));
+        }
+      } else if(w.isArray()) {
+        // here, we blindly assume that all elements
+        // of the array are of the same type and fit
+        // ScyllaDBs Set type
+        List<DataWrapper> wList = w.arrayAsList();
+        boundStmt.setSet(name, arrayWrapperToSet(wList));
+      } else if(w.isNested()) {
+        // here, we blindly assume that a user defined
+        // data type has been added.
+        List<DatabaseField> nesting = w.asNested();
+        boundStmt.setUDTValue(name, nestingToUdt(name, nesting));
+      }
+    }
+  }
   /**
    * Insert a record in the database. Any field/value pairs in the specified
    * values HashMap will be written into the record with the specified record
@@ -536,65 +653,49 @@ public class ScyllaCQLClient extends DB {
    * @return Zero on success, a non-zero error code on error
    */
   @Override
-  public Status insert(String table, String key, Map<String, ByteIterator> values) {
+  public Status insert(String table, String key, List<DatabaseField> values) {
 
-    try {
-      Set<String> fields = values.keySet();
-      PreparedStatement stmt = INSERT_STMTS.get(fields);
-
-      // Prepare statement on demand
-      if (stmt == null) {
-        Insert insertStmt = QueryBuilder.insertInto(table);
-
-        // Add key
-        insertStmt.value(YCSB_KEY, QueryBuilder.bindMarker());
-
-        // Add fields
-        for (String field : fields) {
-          insertStmt.value(field, QueryBuilder.bindMarker());
-        }
-
-        if (lwt) {
-          insertStmt.ifNotExists();
-        }
-
-        stmt = session.prepare(insertStmt);
-        stmt.setConsistencyLevel(writeConsistencyLevel);
-        if (trace) {
-          stmt.enableTracing();
-        }
-
-        PreparedStatement prevStmt = INSERT_STMTS.putIfAbsent(new HashSet<>(fields), stmt);
-        if (prevStmt != null) {
-          stmt = prevStmt;
-        }
+    Set<String> fields = new HashSet<>();
+    values.forEach(v -> fields.add(v.getFieldname()));
+    PreparedStatement stmt = ScyllaStatementHandler.getOrBuildPreparedInsertStatement(fields, table);
+    if (LOGGER.isDebugEnabled()) {
+      LOGGER.debug(stmt.getQueryString());
+      LOGGER.debug("key = {}", key);
+      for (DatabaseField field : values) {
+        LOGGER.debug("{} = {}", field.getFieldname(), field.getContent());
       }
-
-      if (LOGGER.isDebugEnabled()) {
-        LOGGER.debug(stmt.getQueryString());
-        LOGGER.debug("key = {}", key);
-        for (Map.Entry<String, ByteIterator> entry : values.entrySet()) {
-          LOGGER.debug("{} = {}", entry.getKey(), entry.getValue());
-        }
-      }
-
-      // Add key
-      BoundStatement boundStmt = stmt.bind().setString(0, key);
-
-      // Add fields
-      ColumnDefinitions vars = stmt.getVariables();
-      for (int i = 1; i < vars.size(); i++) {
-        boundStmt.setString(i, values.get(vars.getName(i)).toString());
-      }
-
-      session.execute(boundStmt);
-
-      return Status.OK;
-    } catch (Exception e) {
-      LOGGER.error(MessageFormatter.format("Error inserting key: {}", key).getMessage(), e);
     }
-
-    return Status.ERROR;
+    // Add key
+    BoundStatement boundStmt = stmt.bind().setString(0, key);
+    // Add fields
+    ColumnDefinitions vars = stmt.getVariables();
+    if(useTypedFields) {
+      addTypedFieldsToInsertStatement(values, boundStmt);
+    } else {
+      addLegacyFieldsToInsertStatement(vars, values, boundStmt);
+    }
+    Statement toSend;
+    if(batchSize < 2) {
+      toSend = boundStmt;
+    } else {
+      batch.add(boundStmt);
+      if(batch.size() < batchSize) {
+        return Status.BATCHED_OK;
+      }
+      toSend = batch;
+      batch = new BatchStatement(Type.UNLOGGED);
+      toSend.setConsistencyLevel(writeConsistencyLevel);
+    }
+    if (trace) {
+      toSend.enableTracing();
+    }
+    try {
+        session.execute(toSend);
+        return Status.OK;
+      } catch(Exception ex) {
+        LOGGER.error(MessageFormatter.format("Error inserting key: {}", key).getMessage(), ex);
+      }
+      return Status.ERROR;
   }
 
   /**
@@ -608,7 +709,9 @@ public class ScyllaCQLClient extends DB {
    */
   @Override
   public Status delete(String table, String key) {
-
+    if(debug) {
+      System.err.println("deleting key " + key);
+    }
     try {
       PreparedStatement stmt = DELETE_STMT.get();
 
@@ -632,18 +735,80 @@ public class ScyllaCQLClient extends DB {
           stmt = prevStmt;
         }
       }
+      if(LOGGER.isDebugEnabled()) {
+        LOGGER.debug(stmt.getQueryString());
+        LOGGER.debug("key = {}", key);
+      }
 
-      LOGGER.debug(stmt.getQueryString());
-      LOGGER.debug("key = {}", key);
-
-      session.execute(stmt.bind(key));
-
-      return Status.OK;
+      ResultSet rs = session.execute(stmt.bind(key));
+      if(rs.wasApplied()) {
+        return Status.OK;
+      }
+      return Status.NOT_FOUND;
     } catch (Exception e) {
       LOGGER.error(MessageFormatter.format("Error deleting key: {}", key).getMessage(), e);
     }
 
     return Status.ERROR;
   }
-
+  
+  @Override
+  public Status findOne(String table, List<Comparison> filters, Set<String> fields,
+        Map<String, ByteIterator> result) {
+    if(debug) {
+      System.err.println("finding one.");
+    }
+    if(fields != null) throw new IllegalArgumentException("reading specific fields is not supported yet.");
+    if(false == useTypedFields) throw new IllegalStateException("find one does not work without typed fields");
+    PreparedStatement s = ScyllaStatementHandler.getOrBuildPreparedFindOneStatement(table, filters, fields);
+    if(debug) {
+      System.err.println(s.toString());
+      s.enableTracing();
+    }
+    BoundStatement bound = s.bind();
+    // we do not need the next index
+    ScyllaStatementHandler.bindPreparedFineOneStatement(bound, table, filters, fields);
+    ResultSet rs = session.execute( bound );
+    List<Row> results = rs.all();
+    if(results.size() == 0) {
+      return Status.NOT_FOUND;
+    }
+    if(results.size() > 1) {
+      return Status.UNEXPECTED_STATE;
+    }
+    Row row = results.get(0);
+    if(debug) {
+      System.err.println(row.toString());
+    }
+    for (ColumnDefinitions.Definition def : rs.getColumnDefinitions()) {
+        ByteBuffer val = row.getBytesUnsafe(def.getName());
+        if (val != null) {
+          result.put(def.getName(), new ByteArrayByteIterator(val.array()));
+        } else {
+          result.put(def.getName(), null);
+        }
+      }
+    return Status.OK;
+  }
+  @Override
+  public Status updateOne(String table, List<Comparison> filters, List<DatabaseField> fields) {
+    if(false == useTypedFields) throw new IllegalStateException("find one does not work without typed fields");
+    Map<String, ByteIterator> result = new HashMap<>();
+    Status stat = findOne(table, filters, null, result);
+    if(stat != Status.OK) {
+      return stat;
+    }
+    ByteIterator iterator = result.get(YCSB_KEY);
+    String myPrimaryKey = iterator.toString();
+    PreparedStatement stmt = ScyllaStatementHandler.getOrBuildPreparedUpdateOneStatement(table, fields);
+    BoundStatement bound = stmt.bind();
+    ScyllaStatementHandler.bindPreparedUpdateOneStatment(myPrimaryKey, 0, fields, bound);
+    System.err.println(bound.toString());
+    ResultSet rs = session.execute( bound );
+    List<Row> results = rs.all();
+    if(results.size() > 0) {
+      return Status.UNEXPECTED_STATE;
+    }
+    return Status.OK;
+  }
 }

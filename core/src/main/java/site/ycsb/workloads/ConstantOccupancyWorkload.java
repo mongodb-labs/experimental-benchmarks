@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2010 Yahoo! Inc. All rights reserved.
+ * Copyrihght (c) 2023 - 2024 benchANT GmbH. All rights reserved.
  * <p>
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
@@ -19,9 +20,10 @@ package site.ycsb.workloads;
 import site.ycsb.Client;
 import site.ycsb.WorkloadException;
 import site.ycsb.generator.NumberGenerator;
+import site.ycsb.workloads.core.CoreHelper;
 
 import java.util.Properties;
-
+import static site.ycsb.workloads.core.CoreConstants.*;
 /**
  * A disk-fragmenting workload.
  * <p>
@@ -70,7 +72,7 @@ public class ConstantOccupancyWorkload extends CoreWorkload {
       System.err.println("Warning: record, insert or operation count was set prior to initting " +
           "ConstantOccupancyWorkload.  Overriding old values.");
     }
-    NumberGenerator g = CoreWorkload.getFieldLengthGenerator(p);
+    NumberGenerator g = CoreHelper.getFieldLengthGenerator(p);
     double fieldsize = g.mean();
     int fieldcount = Integer.parseInt(p.getProperty(FIELD_COUNT_PROPERTY, FIELD_COUNT_PROPERTY_DEFAULT));
 

@@ -42,7 +42,9 @@ import site.ycsb.StringByteIterator;
 import site.ycsb.Utils;
 import site.ycsb.WorkloadException;
 import site.ycsb.measurements.Measurements;
+import site.ycsb.wrappers.DatabaseField;
 
+import static site.ycsb.workloads.core.CoreConstants.*;
 import org.testng.annotations.Test;
 
 public class TestTimeSeriesWorkload {
@@ -132,7 +134,7 @@ public class TestTimeSeriesWorkload {
   @Test
   public void insertOneKeyOneTagCardinalityOne() throws Exception {
     final Properties p = getUTProperties();
-    p.put(CoreWorkload.FIELD_COUNT_PROPERTY, "1");
+    p.put(FIELD_COUNT_PROPERTY, "1");
     p.put(TimeSeriesWorkload.TAG_COUNT_PROPERTY, "1");
     p.put(TimeSeriesWorkload.TAG_CARDINALITY_PROPERTY, "1");
     final TimeSeriesWorkload wl = getWorkload(p, true);
@@ -159,7 +161,7 @@ public class TestTimeSeriesWorkload {
   @Test
   public void insertOneKeyTwoTagsLowCardinality() throws Exception {
     final Properties p = getUTProperties();
-    p.put(CoreWorkload.FIELD_COUNT_PROPERTY, "1");
+    p.put(FIELD_COUNT_PROPERTY, "1");
     final TimeSeriesWorkload wl = getWorkload(p, true);
     final Object threadState = wl.initThread(p, 0, 1);
     
@@ -284,7 +286,7 @@ public class TestTimeSeriesWorkload {
   public void insertThreeKeysTwoThreads() throws Exception {
     // To make sure the distribution doesn't miss any metrics
     final Properties p = getUTProperties();
-    p.put(CoreWorkload.FIELD_COUNT_PROPERTY, "3");
+    p.put(FIELD_COUNT_PROPERTY, "3");
     
     final TimeSeriesWorkload wl = getWorkload(p, true);
     Object threadState = wl.initThread(p, 0, 2);
@@ -345,8 +347,8 @@ public class TestTimeSeriesWorkload {
   @Test
   public void insertWithValidation() throws Exception {
     final Properties p = getUTProperties();
-    p.put(CoreWorkload.FIELD_COUNT_PROPERTY, "1");
-    p.put(CoreWorkload.DATA_INTEGRITY_PROPERTY, "true");
+    p.put(FIELD_COUNT_PROPERTY, "1");
+    p.put(DATA_INTEGRITY_PROPERTY, "true");
     p.put(TimeSeriesWorkload.VALUE_TYPE_PROPERTY, "integers");
     final TimeSeriesWorkload wl = getWorkload(p, true);
     final Object threadState = wl.initThread(p, 0, 1);
@@ -439,7 +441,7 @@ public class TestTimeSeriesWorkload {
     Properties p = getUTProperties();
     
     // data validation incompatibilities
-    p.setProperty(CoreWorkload.DATA_INTEGRITY_PROPERTY, "true");
+    p.setProperty(DATA_INTEGRITY_PROPERTY, "true");
     try {
       getWorkload(p, true);
       fail("Expected WorkloadException");
@@ -469,7 +471,7 @@ public class TestTimeSeriesWorkload {
     } catch (WorkloadException e) { }
     
     p = getUTProperties();
-    p.setProperty(CoreWorkload.DATA_INTEGRITY_PROPERTY, "true");
+    p.setProperty(DATA_INTEGRITY_PROPERTY, "true");
     p.setProperty(TimeSeriesWorkload.VALUE_TYPE_PROPERTY, "integers");
     p.setProperty(TimeSeriesWorkload.RANDOMIZE_TIMESERIES_ORDER_PROPERTY, "true");
     try {
@@ -489,8 +491,8 @@ public class TestTimeSeriesWorkload {
   private Properties getUTProperties() {
     final Properties p = new Properties();
     p.put(Client.RECORD_COUNT_PROPERTY, "10");
-    p.put(CoreWorkload.FIELD_COUNT_PROPERTY, "2");
-    p.put(CoreWorkload.FIELD_LENGTH_PROPERTY, "4");
+    p.put(FIELD_COUNT_PROPERTY, "2");
+    p.put(FIELD_LENGTH_PROPERTY, "4");
     p.put(TimeSeriesWorkload.TAG_KEY_LENGTH_PROPERTY, "2");
     p.put(TimeSeriesWorkload.TAG_VALUE_LENGTH_PROPERTY, "4");
     p.put(TimeSeriesWorkload.TAG_COUNT_PROPERTY, "2");
@@ -540,10 +542,13 @@ public class TestTimeSeriesWorkload {
     }
 
     @Override
-    public Status insert(String table, String key,
-        Map<String, ByteIterator> values) {
+    public Status insert(String table, String key, List<DatabaseField> values) {
       keys.add(key);
-      this.values.add(values);
+      Map<String,ByteIterator> buff = new HashMap<>();
+      for(DatabaseField f : values) {
+        buff.put(f.getFieldname(), f.getContent().asIterator());
+      }
+      this.values.add(buff);
       return Status.OK;
     }
 

@@ -28,6 +28,8 @@ import site.ycsb.ByteArrayByteIterator;
 import site.ycsb.ByteIterator;
 import site.ycsb.DB;
 import site.ycsb.Status;
+import site.ycsb.wrappers.DatabaseField;
+import site.ycsb.wrappers.Wrappers;
 
 import org.junit.BeforeClass;
 import org.junit.Test;
@@ -35,8 +37,10 @@ import org.junit.Test;
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.Socket;
+import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
@@ -92,10 +96,11 @@ public abstract class AbstractDBTestCases {
     final String table = getClass().getSimpleName();
     final String id = "delete";
 
-    HashMap<String, ByteIterator> inserted =
-        new HashMap<String, ByteIterator>();
-    inserted.put("a", new ByteArrayByteIterator(new byte[] { 1, 2, 3, 4 }));
-    Status result = client.insert(table, id, inserted);
+    List<DatabaseField> values = new ArrayList<>();
+    values.add(
+      new DatabaseField("a", Wrappers.wrapIterator(new ByteArrayByteIterator(new byte[] { 1, 2, 3, 4 })))
+    );
+    Status result = client.insert(table, id, values);
     assertThat("Insert did not return success (0).", result, is(Status.OK));
 
     HashMap<String, ByteIterator> read = new HashMap<String, ByteIterator>();
@@ -141,10 +146,11 @@ public abstract class AbstractDBTestCases {
     final String table = getClass().getSimpleName();
     final String id = "update";
 
-    HashMap<String, ByteIterator> inserted =
-        new HashMap<String, ByteIterator>();
-    inserted.put("a", new ByteArrayByteIterator(new byte[] { 1, 2, 3, 4 }));
-    Status result = client.insert(table, id, inserted);
+    List<DatabaseField> values = new ArrayList<>();
+    values.add(
+      new DatabaseField("a", Wrappers.wrapIterator(new ByteArrayByteIterator(new byte[] { 1, 2, 3, 4 })))
+    );
+    Status result = client.insert(table, id, values);
     assertThat("Insert did not return success (0).", result, is(Status.OK));
 
     HashMap<String, ByteIterator> read = new HashMap<String, ByteIterator>();
@@ -204,10 +210,11 @@ public abstract class AbstractDBTestCases {
     final String table = getClass().getSimpleName();
     final String id = "updateWithUpsert";
 
-    HashMap<String, ByteIterator> inserted =
-        new HashMap<String, ByteIterator>();
-    inserted.put("a", new ByteArrayByteIterator(new byte[] { 1, 2, 3, 4 }));
-    Status result = client.insert(table, id, inserted);
+    List<DatabaseField> values = new ArrayList<>();
+    values.add(
+      new DatabaseField("a", Wrappers.wrapIterator(new ByteArrayByteIterator(new byte[] { 1, 2, 3, 4 })))
+    );
+    Status result = client.insert(table, id, values);
     assertThat("Insert did not return success (0).", result, is(Status.OK));
 
     HashMap<String, ByteIterator> read = new HashMap<String, ByteIterator>();
@@ -266,12 +273,15 @@ public abstract class AbstractDBTestCases {
 
     // Insert a bunch of documents.
     for (int i = 0; i < 100; ++i) {
-      HashMap<String, ByteIterator> inserted =
-          new HashMap<String, ByteIterator>();
-      inserted.put("a", new ByteArrayByteIterator(new byte[] {
+        List<DatabaseField> values = new ArrayList<>();
+        values.add(
+        new DatabaseField("a", Wrappers.wrapIterator(
+          new ByteArrayByteIterator(new byte[] {
           (byte) (i & 0xFF), (byte) (i >> 8 & 0xFF), (byte) (i >> 16 & 0xFF),
-          (byte) (i >> 24 & 0xFF) }));
-      Status result = client.insert(table, padded(i), inserted);
+          (byte) (i >> 24 & 0xFF) })
+        ))
+      );
+      Status result = client.insert(table, padded(i), values);
       assertThat("Insert did not return success (0).", result, is(Status.OK));
     }
 

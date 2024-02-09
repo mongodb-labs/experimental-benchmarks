@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2010-2016 Yahoo! Inc., 2017 YCSB contributors All rights reserved.
+ * Copyright (c) 2023 - 2024 benchANT GmbH. All rights reserved.
  * <p>
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
@@ -211,7 +212,7 @@ public final class Client {
    *
    * @throws IOException Either failed to write to output stream or failed to close it.
    */
-  private static void exportMeasurements(Properties props, int opcount, long runtime)
+  private static void exportMeasurements(Properties props, long opcount, long runtime)
       throws IOException {
     MeasurementsExporter exporter = null;
     try {
@@ -327,7 +328,7 @@ public final class Client {
     Thread terminator = null;
     long st;
     long en;
-    int opsDone;
+    long opsDone;
 
     try (final TraceScope span = tracer.newScope(CLIENT_WORKLOAD_SPAN)) {
 

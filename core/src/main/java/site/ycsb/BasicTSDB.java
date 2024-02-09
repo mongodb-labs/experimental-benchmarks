@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2017 YCSB contributors All rights reserved.
+ * Copyright (c) 2023 - 2024 benchANT GmbH. All rights reserved.
  * <p>
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
@@ -18,12 +19,14 @@ package site.ycsb;
 
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.TreeMap;
 
 import site.ycsb.workloads.TimeSeriesWorkload;
+import site.ycsb.wrappers.DatabaseField;
 
 /**
  * Basic DB for printing out time series workloads and/or tracking the distribution
@@ -171,7 +174,8 @@ public class BasicTSDB extends BasicDB {
   }
 
   @Override
-  public Status insert(String table, String key, Map<String, ByteIterator> values) {
+  public Status insert(String table, String key, List<DatabaseField> values_) {
+    Map<String,ByteIterator> values = DB.fieldListAsIteratorMap(values_);
     delay();
     
     boolean isFloat = false;
@@ -246,7 +250,7 @@ public class BasicTSDB extends BasicDB {
     }
   }
   
-  @Override
+  
   protected int hash(final String table, final String key, final Map<String, ByteIterator> values) {
     final TreeMap<String, ByteIterator> sorted = new TreeMap<String, ByteIterator>();
     for (final Entry<String, ByteIterator> entry : values.entrySet()) {

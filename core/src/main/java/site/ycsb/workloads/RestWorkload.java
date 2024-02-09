@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2016-2017 YCSB contributors. All rights reserved.
+ * Copyright (c) 2023 - 2024 benchANT GmbH. All rights reserved.
  * <p>
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
@@ -22,15 +23,20 @@ import site.ycsb.DB;
 import site.ycsb.RandomByteIterator;
 import site.ycsb.WorkloadException;
 import site.ycsb.generator.*;
+import site.ycsb.workloads.core.CoreHelper;
+import site.ycsb.wrappers.ByteIteratorWrapper;
+import site.ycsb.wrappers.DatabaseField;
 
 import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 
-import site.ycsb.generator.UniformLongGenerator;
+import static site.ycsb.workloads.core.CoreConstants.*;
 /**
  * Typical RESTFul services benchmarking scenario. Represents a set of client
  * calling REST operations like HTTP DELETE, GET, POST, PUT on a web service.
@@ -149,7 +155,7 @@ public class RestWorkload extends CoreWorkload {
 
   public static DiscreteGenerator createOperationGenerator(final Properties p) {
     // Re-using CoreWorkload method.
-    final DiscreteGenerator operationChooser = CoreWorkload.createOperationGenerator(p);
+    final DiscreteGenerator operationChooser = CoreHelper.createOperationGenerator(p);
     // Needs special handling for delete operations not supported in CoreWorkload.
     double deleteproportion = Double
         .parseDouble(p.getProperty(DELETE_PROPORTION_PROPERTY, DELETE_PROPORTION_PROPERTY_DEFAULT));
@@ -192,7 +198,7 @@ public class RestWorkload extends CoreWorkload {
 
   protected static NumberGenerator getFieldLengthGenerator(Properties p) throws WorkloadException {
     // Re-using CoreWorkload method. 
-    NumberGenerator fieldLengthGenerator = CoreWorkload.getFieldLengthGenerator(p);
+    NumberGenerator fieldLengthGenerator = CoreHelper.getFieldLengthGenerator(p);
     String fieldlengthdistribution = p.getProperty(FIELD_LENGTH_DISTRIBUTION_PROPERTY,
         FIELD_LENGTH_DISTRIBUTION_PROPERTY_DEFAULT);
     // Needs special handling for Zipfian distribution for variable Zipf Constant.
@@ -285,10 +291,11 @@ public class RestWorkload extends CoreWorkload {
 
   @Override
   public void doTransactionInsert(DB db) {
-    HashMap<String, ByteIterator> value = new HashMap<String, ByteIterator>();
+    List<DatabaseField> values = new ArrayList<>();
     // Create random bytes of insert data with a specific size.
-    value.put("data", new RandomByteIterator(fieldlengthgenerator.nextValue().longValue()));
-    db.insert(null, getNextURL(2), value);
+    final ByteIterator data = new RandomByteIterator(fieldlengthgenerator.nextValue().longValue());
+    values.add(new DatabaseField("data", ByteIteratorWrapper.create(data)));
+    db.insert(null, getNextURL(2), values);
   }
 
   public void doTransactionDelete(DB db) {

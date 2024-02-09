@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2010-2016 Yahoo! Inc., 2017 YCSB contributors All rights reserved.
+ * Copyright (c) 2023 - 2024 benchANT GmbH. All rights reserved.
  * <p>
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
@@ -18,10 +19,13 @@
 package site.ycsb;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
 import java.util.Vector;
+
+import site.ycsb.wrappers.DatabaseField;
 
 /**
  * A layer for accessing a database to be benchmarked. Each thread in the client
@@ -122,7 +126,8 @@ public abstract class DB {
    * @param values A HashMap of field/value pairs to insert in the record
    * @return The result of the operation.
    */
-  public abstract Status insert(String table, String key, Map<String, ByteIterator> values);
+  // public abstract Status insert(String table, String key, Map<String, ByteIterator> values);
+  public abstract Status insert(String table, String key, List<DatabaseField> values);
 
   /**
    * Delete a record from the database.
@@ -132,4 +137,12 @@ public abstract class DB {
    * @return The result of the operation.
    */
   public abstract Status delete(String table, String key);
+
+  public static Map<String,ByteIterator> fieldListAsIteratorMap(List<DatabaseField> list) {
+    Map<String,ByteIterator> values = new HashMap<>();
+    for(DatabaseField f : list) {
+      values.put(f.getFieldname(), f.getContent().asIterator());
+    }
+    return values;
+  }
 }

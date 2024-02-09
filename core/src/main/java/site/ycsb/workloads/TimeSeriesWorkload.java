@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2017 YCSB contributors All rights reserved.
+ * Copyright (c) 2023 - 2024 benchANT GmbH. All rights reserved.
  * <p>
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
@@ -16,8 +17,10 @@
  */
 package site.ycsb.workloads;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Properties;
@@ -28,6 +31,7 @@ import java.util.Vector;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 
+import site.ycsb.BasicTSDB;
 import site.ycsb.ByteIterator;
 import site.ycsb.Client;
 import site.ycsb.DB;
@@ -49,6 +53,12 @@ import site.ycsb.generator.UniformLongGenerator;
 import site.ycsb.generator.UnixEpochTimestampGenerator;
 import site.ycsb.generator.ZipfianGenerator;
 import site.ycsb.measurements.Measurements;
+import site.ycsb.workloads.core.CoreHelper;
+import site.ycsb.wrappers.ByteIteratorWrapper;
+import site.ycsb.wrappers.DataWrapper;
+import site.ycsb.wrappers.DatabaseField;
+
+import static site.ycsb.workloads.core.CoreConstants.*;
 
 /**
  * A specialized workload dealing with time series data, i.e. series of discreet
@@ -552,14 +562,14 @@ public class TimeSeriesWorkload extends Workload {
     }
     timestampKey = p.getProperty(TIMESTAMP_KEY_PROPERTY, TIMESTAMP_KEY_PROPERTY_DEFAULT);
     valueKey = p.getProperty(VALUE_KEY_PROPERTY, VALUE_KEY_PROPERTY_DEFAULT);
-    operationchooser = CoreWorkload.createOperationGenerator(properties);
+    operationchooser = CoreHelper.createOperationGenerator(properties);
     
     final int maxscanlength =
-        Integer.parseInt(p.getProperty(CoreWorkload.MAX_SCAN_LENGTH_PROPERTY, 
-            CoreWorkload.MAX_SCAN_LENGTH_PROPERTY_DEFAULT));
+        Integer.parseInt(p.getProperty(MAX_SCAN_LENGTH_PROPERTY, 
+            MAX_SCAN_LENGTH_PROPERTY_DEFAULT));
     String scanlengthdistrib =
-        p.getProperty(CoreWorkload.SCAN_LENGTH_DISTRIBUTION_PROPERTY, 
-            CoreWorkload.SCAN_LENGTH_DISTRIBUTION_PROPERTY_DEFAULT);
+        p.getProperty(SCAN_LENGTH_DISTRIBUTION_PROPERTY, 
+            SCAN_LENGTH_DISTRIBUTION_PROPERTY_DEFAULT);
     
     if (scanlengthdistrib.compareTo("uniform") == 0) {
       scanlength = new UniformLongGenerator(1, maxscanlength);
@@ -578,16 +588,16 @@ public class TimeSeriesWorkload extends Workload {
         RANDOMIZE_TIMESERIES_ORDER_PROPERTY_DEFAULT));
     
     // setup the cardinality
-    numKeys = Integer.parseInt(p.getProperty(CoreWorkload.FIELD_COUNT_PROPERTY, 
-        CoreWorkload.FIELD_COUNT_PROPERTY_DEFAULT));
+    numKeys = Integer.parseInt(p.getProperty(FIELD_COUNT_PROPERTY, 
+        FIELD_COUNT_PROPERTY_DEFAULT));
     tagPairs = Integer.parseInt(p.getProperty(TAG_COUNT_PROPERTY, 
         TAG_COUNT_PROPERTY_DEFAULT));
     sparsity = Double.parseDouble(p.getProperty(SPARSITY_PROPERTY, SPARSITY_PROPERTY_DEFAULT));
     tagCardinality = new int[tagPairs];
     
     final String requestdistrib =
-        p.getProperty(CoreWorkload.REQUEST_DISTRIBUTION_PROPERTY, 
-            CoreWorkload.REQUEST_DISTRIBUTION_PROPERTY_DEFAULT);
+        p.getProperty(REQUEST_DISTRIBUTION_PROPERTY, 
+            REQUEST_DISTRIBUTION_PROPERTY_DEFAULT);
     if (requestdistrib.compareTo("uniform") == 0) {
       keychooser = new UniformLongGenerator(0, numKeys - 1);
     } else if (requestdistrib.compareTo("sequential") == 0) {
@@ -598,11 +608,11 @@ public class TimeSeriesWorkload extends Workload {
     //  keychooser = new SkewedLatestGenerator(transactioninsertkeysequence);
     } else if (requestdistrib.equals("hotspot")) {
       double hotsetfraction =
-          Double.parseDouble(p.getProperty(CoreWorkload.HOTSPOT_DATA_FRACTION, 
-              CoreWorkload.HOTSPOT_DATA_FRACTION_DEFAULT));
+          Double.parseDouble(p.getProperty(HOTSPOT_DATA_FRACTION, 
+              HOTSPOT_DATA_FRACTION_DEFAULT));
       double hotopnfraction =
-          Double.parseDouble(p.getProperty(CoreWorkload.HOTSPOT_OPN_FRACTION, 
-              CoreWorkload.HOTSPOT_OPN_FRACTION_DEFAULT));
+          Double.parseDouble(p.getProperty(HOTSPOT_OPN_FRACTION, 
+              HOTSPOT_OPN_FRACTION_DEFAULT));
       keychooser = new HotspotIntegerGenerator(0, numKeys - 1,
           hotsetfraction, hotopnfraction);
     } else {
@@ -632,8 +642,8 @@ public class TimeSeriesWorkload extends Workload {
     tagPairDelimiter = p.getProperty(PAIR_DELIMITER_PROPERTY, PAIR_DELIMITER_PROPERTY_DEFAULT);
     deleteDelimiter = p.getProperty(DELETE_DELIMITER_PROPERTY, DELETE_DELIMITER_PROPERTY_DEFAULT);
     dataintegrity = Boolean.parseBoolean(
-        p.getProperty(CoreWorkload.DATA_INTEGRITY_PROPERTY, 
-            CoreWorkload.DATA_INTEGRITY_PROPERTY_DEFAULT));
+        p.getProperty(DATA_INTEGRITY_PROPERTY, 
+            DATA_INTEGRITY_PROPERTY_DEFAULT));
     if (dataintegrity) {
       System.out.println("Data integrity is enabled.");
     }
@@ -680,7 +690,7 @@ public class TimeSeriesWorkload extends Workload {
     delayedIntervals = Integer.parseInt(p.getProperty(DELAYED_INTERVALS_PROPERTY, DELAYED_INTERVALS_PROPERTY_DEFAULT));
     
     valueType = ValueType.fromString(p.getProperty(VALUE_TYPE_PROPERTY, VALUE_TYPE_PROPERTY_DEFAULT));
-    table = p.getProperty(CoreWorkload.TABLENAME_PROPERTY, CoreWorkload.TABLENAME_PROPERTY_DEFAULT);
+    table = p.getProperty(TABLENAME_PROPERTY, TABLENAME_PROPERTY_DEFAULT);
     initKeysAndTags();
     validateSettings();
   }
@@ -700,7 +710,12 @@ public class TimeSeriesWorkload extends Workload {
     }
     final Map<String, ByteIterator> tags = new TreeMap<String, ByteIterator>();
     final String key = ((ThreadState)threadstate).nextDataPoint(tags, true);
-    if (db.insert(table, key, tags) == Status.OK) {
+    final List<DatabaseField> fields = new ArrayList<>(tags.size());
+    tags.entrySet().forEach(entry -> {
+      final DataWrapper data = ByteIteratorWrapper.create(entry.getValue());
+      fields.add(new DatabaseField(entry.getKey(), data));
+    });
+    if (db.insert(table, key, fields) == Status.OK) {
       return true;
     }
     return false;
@@ -949,8 +964,8 @@ public class TimeSeriesWorkload extends Workload {
    */
   protected void initKeysAndTags() throws WorkloadException {
     final int keyLength = Integer.parseInt(properties.getProperty(
-        CoreWorkload.FIELD_LENGTH_PROPERTY, 
-        CoreWorkload.FIELD_LENGTH_PROPERTY_DEFAULT));
+        FIELD_LENGTH_PROPERTY, 
+        FIELD_LENGTH_PROPERTY_DEFAULT));
     final int tagKeyLength = Integer.parseInt(properties.getProperty(
         TAG_KEY_LENGTH_PROPERTY, TAG_KEY_LENGTH_PROPERTY_DEFAULT));
     final int tagValueLength = Integer.parseInt(properties.getProperty(

@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2010 Yahoo! Inc. All rights reserved.
+ * Copyright (c) 2023 - 2024 benchANT GmbH. All rights reserved.
  * <p>
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
@@ -18,6 +19,7 @@
 package site.ycsb;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.Set;
@@ -27,6 +29,8 @@ import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.LockSupport;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
+
+import site.ycsb.wrappers.DatabaseField;
 
 import static java.util.concurrent.TimeUnit.MICROSECONDS;
 
@@ -142,7 +146,7 @@ public class GoodBadUglyDB extends DB {
    * @param values A HashMap of field/value pairs to insert in the record
    * @return Zero on success, a non-zero error code on error
    */
-  public Status insert(String table, String key, Map<String, ByteIterator> values) {
+  public Status insert(String table, String key, List<DatabaseField> values) {
     delay();
     return Status.OK;
   }

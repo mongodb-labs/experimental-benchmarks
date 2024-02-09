@@ -37,6 +37,10 @@ import site.ycsb.Status;
 import site.ycsb.StringByteIterator;
 import site.ycsb.measurements.Measurements;
 import site.ycsb.workloads.CoreWorkload;
+import site.ycsb.wrappers.DatabaseField;
+import site.ycsb.wrappers.Wrappers;
+
+import static site.ycsb.db.scylla.ScyllaDbConstants.*;
 
 import org.cassandraunit.CassandraCQLUnit;
 import org.cassandraunit.dataset.cql.ClassPathCQLDataSet;
@@ -45,7 +49,9 @@ import org.junit.Before;
 import org.junit.ClassRule;
 import org.junit.Test;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Properties;
 import java.util.Set;
@@ -115,7 +121,7 @@ public class ScyllaCQLClientTest {
 
   private void insertRow() {
     Insert insertStmt = QueryBuilder.insertInto(TABLE);
-    insertStmt.value(ScyllaCQLClient.YCSB_KEY, DEFAULT_ROW_KEY);
+    insertStmt.value(YCSB_KEY, DEFAULT_ROW_KEY);
 
     insertStmt.value("field0", "value1");
     insertStmt.value("field1", "value2");
@@ -138,7 +144,7 @@ public class ScyllaCQLClientTest {
         strResult.put(e.getKey(), e.getValue().toString());
       }
     }
-    assertThat(strResult, hasEntry(ScyllaCQLClient.YCSB_KEY, DEFAULT_ROW_KEY));
+    assertThat(strResult, hasEntry(YCSB_KEY, DEFAULT_ROW_KEY));
     assertThat(strResult, hasEntry("field0", "value1"));
     assertThat(strResult, hasEntry("field1", "value2"));
   }
@@ -158,18 +164,18 @@ public class ScyllaCQLClientTest {
   @Test
   public void testInsert() {
     final String key = "key";
-    final Map<String, String> input = new HashMap<>();
-    input.put("field0", "value1");
-    input.put("field1", "value2");
+    final List<DatabaseField> input = new ArrayList<>();
+    input.add(new DatabaseField("field0", Wrappers.wrapIterator(new StringByteIterator("value1"))));
+    input.add(new DatabaseField("field1", Wrappers.wrapIterator(new StringByteIterator("value2"))));
 
-    final Status status = client.insert(TABLE, key, StringByteIterator.getByteIteratorMap(input));
+    final Status status = client.insert(TABLE, key, input);
     assertThat(status, is(Status.OK));
 
     // Verify result
     final Select selectStmt =
         QueryBuilder.select("field0", "field1")
             .from(TABLE)
-            .where(QueryBuilder.eq(ScyllaCQLClient.YCSB_KEY, key))
+            .where(QueryBuilder.eq(YCSB_KEY, key))
             .limit(1);
 
     final ResultSet rs = session.execute(selectStmt);
@@ -196,7 +202,7 @@ public class ScyllaCQLClientTest {
     final Select selectStmt =
         QueryBuilder.select("field0", "field1")
             .from(TABLE)
-            .where(QueryBuilder.eq(ScyllaCQLClient.YCSB_KEY, DEFAULT_ROW_KEY))
+            .where(QueryBuilder.eq(YCSB_KEY, DEFAULT_ROW_KEY))
             .limit(1);
 
     final ResultSet rs = session.execute(selectStmt);
@@ -218,7 +224,7 @@ public class ScyllaCQLClientTest {
     final Select selectStmt =
         QueryBuilder.select("field0", "field1")
             .from(TABLE)
-            .where(QueryBuilder.eq(ScyllaCQLClient.YCSB_KEY, DEFAULT_ROW_KEY))
+            .where(QueryBuilder.eq(YCSB_KEY, DEFAULT_ROW_KEY))
             .limit(1);
 
     final ResultSet rs = session.execute(selectStmt);

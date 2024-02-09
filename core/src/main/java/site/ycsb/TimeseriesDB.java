@@ -1,5 +1,6 @@
 /*
  * Copyright (c) 2018 YCSB Contributors All rights reserved.
+ * Copyright (c) 2023 - 2024 benchANT GmbH. All rights reserved.
  * <p>
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
@@ -19,6 +20,7 @@ package site.ycsb;
 import site.ycsb.generator.Generator;
 import site.ycsb.generator.IncrementingPrintableStringGenerator;
 import site.ycsb.workloads.TimeSeriesWorkload;
+import site.ycsb.wrappers.DatabaseField;
 
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -220,9 +222,22 @@ public abstract class TimeseriesDB extends DB {
   }
 
   @Override
-  public final Status insert(String table, String key, Map<String, ByteIterator> values) {
-    NumericByteIterator tsContainer = (NumericByteIterator) values.remove(timestampKey);
-    NumericByteIterator valueContainer = (NumericByteIterator) values.remove(valueKey);
+  public final Status insert(String table, String key, List<DatabaseField> fields) {
+    NumericByteIterator tsContainer = null;
+    NumericByteIterator valueContainer = null;
+    Map<String, ByteIterator> values = new HashMap<String,ByteIterator>();
+    for(DatabaseField f : fields) {
+      String fieldname = f.getFieldname();
+      if(timestampKey.equals(fieldname)) {
+        tsContainer = (NumericByteIterator) f.getContent().asIterator();
+        continue;
+      }
+      if(valueKey.equals(f.getFieldname())) {
+        valueContainer = (NumericByteIterator) f.getContent().asIterator();
+        continue;
+      }
+      values.put(fieldname, f.getContent().asIterator());
+    }
     if (valueContainer.isFloatingPoint()) {
       return insert(table, tsContainer.getLong(), valueContainer.getDouble(), values);
     } else {

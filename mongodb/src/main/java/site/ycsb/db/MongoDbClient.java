@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2012 - 2015 YCSB contributors. All rights reserved.
+ * Copyright (c) 2023 - 2024 benchANT GmbH. All rights reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
@@ -24,30 +25,43 @@
  */
 package site.ycsb.db;
 
-import com.mongodb.MongoClient;
-import com.mongodb.MongoClientURI;
+import com.mongodb.client.MongoClient;
+import com.mongodb.client.MongoClients;
+import com.mongodb.ConnectionString;
+import com.mongodb.MongoClientSettings;
 import com.mongodb.ReadPreference;
 import com.mongodb.WriteConcern;
 import com.mongodb.client.FindIterable;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoCursor;
 import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.model.IndexModel;
 import com.mongodb.client.model.InsertManyOptions;
 import com.mongodb.client.model.ReplaceOptions;
 import com.mongodb.client.model.UpdateOneModel;
 import com.mongodb.client.model.UpdateOptions;
 import com.mongodb.client.result.DeleteResult;
 import com.mongodb.client.result.UpdateResult;
+
 import site.ycsb.ByteArrayByteIterator;
 import site.ycsb.ByteIterator;
 import site.ycsb.DB;
 import site.ycsb.DBException;
+import site.ycsb.IndexableDB;
 import site.ycsb.Status;
+import site.ycsb.workloads.core.CoreConstants;
+import site.ycsb.wrappers.Comparison;
+import site.ycsb.wrappers.DataWrapper;
+import site.ycsb.wrappers.DatabaseField;
 
+import org.bson.conversions.Bson;
+import org.bson.BsonArray;
+import org.bson.BsonValue;
 import org.bson.Document;
 import org.bson.types.Binary;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -67,7 +81,8 @@ import java.util.concurrent.atomic.AtomicInteger;
  * @see <a href="http://docs.mongodb.org/ecosystem/drivers/java/">MongoDB Inc.
  *      driver</a>
  */
-public class MongoDbClient extends DB {
+public class MongoDbClient extends DB implements IndexableDB {
+  public static final String INDEX_LIST_PROPERTY = "mongodb.indexlist";
 
   /** Used to include a field in a response. */
   private static final Integer INCLUDE = Integer.valueOf(1);
@@ -112,6 +127,8 @@ public class MongoDbClient extends DB {
   /** The bulk inserts pending for the thread. */
   private final List<Document> bulkInserts = new ArrayList<Document>();
 
+  private static boolean useTypedFields;
+  private static boolean debug = false;
   /**
    * Cleanup any state for this DB. Called once per DB instance; there is one DB
    * instance per client thread.
@@ -152,7 +169,9 @@ public class MongoDbClient extends DB {
       DeleteResult result =
           collection.withWriteConcern(writeConcern).deleteOne(query);
       if (result.wasAcknowledged() && result.getDeletedCount() == 0) {
-        System.err.println("Nothing deleted for key " + key);
+        if(debug) {
+          System.err.println("Nothing deleted for key " + key);
+        }
         return Status.NOT_FOUND;
       }
       return Status.OK;
@@ -162,6 +181,34 @@ public class MongoDbClient extends DB {
     }
   }
 
+  private static List<BsonValue> getIndexList(Properties props) {
+    String indexeslist = props.getProperty(INDEX_LIST_PROPERTY);
+    if(indexeslist == null) {
+      return Collections.emptyList();
+    }
+    BsonArray barray = BsonArray.parse(indexeslist);
+    return barray.getValues();
+  }
+  
+  private static void setIndexes(Properties props, List<BsonValue> indexes, MongoDatabase database) {
+    if(indexes.size() == 0) {
+      return;
+    }
+
+    final String table = props.getProperty(CoreConstants.TABLENAME_PROPERTY, CoreConstants.TABLENAME_PROPERTY_DEFAULT);
+    
+    List<IndexModel> iModel = new ArrayList<>();
+      for(BsonValue idx : indexes) {
+        if(!idx.isDocument()) {
+          System.err.println("illegal index format");
+          System.exit(-2);
+        }
+        iModel.add(new IndexModel(idx.asDocument()));
+      }
+      MongoCollection<Document> collection = database.getCollection(table);
+      List<String> names = collection.createIndexes(iModel);
+      System.err.println("created indexes: " + names);
+  }
   /**
    * Initialize any state for this DB. Called once per DB instance; there is one
    * DB instance per client thread.
@@ -175,7 +222,7 @@ public class MongoDbClient extends DB {
       }
 
       Properties props = getProperties();
-
+      debug = Boolean.parseBoolean(getProperties().getProperty("debug", "false"));
       // Set insert batchsize, default 1 - to be YCSB-original equivalent
       batchSize = Integer.parseInt(props.getProperty("batchsize", "1"));
 
@@ -204,28 +251,42 @@ public class MongoDbClient extends DB {
         System.exit(1);
       }
 
+      ConnectionString cs = new ConnectionString(url);
+      MongoClientSettings.Builder settingsBuilder = 
+        MongoClientSettings.builder().applyConnectionString(cs);
+      readPreference = cs.getReadPreference();
+      if(cs.getReadPreference() == null) {
+        readPreference = ReadPreference.primary();
+        System.err.println("read preference not set, using default: " + readPreference);
+        settingsBuilder.readPreference(readPreference);
+      } else {
+        System.err.println("using user-defined read prefernence: " + readPreference);
+      }
+      writeConcern = cs.getWriteConcern();
+      if(writeConcern == null) {
+        writeConcern = WriteConcern.MAJORITY;
+        System.err.println("write concern not set, using default: " + writeConcern);
+        settingsBuilder.writeConcern(writeConcern);
+      } else {
+        System.err.println("using user-defined write concern: " + writeConcern);
+      }
+      final String uriDb = cs.getDatabase();
+      if (!defaultedUrl && (uriDb != null) && !uriDb.isEmpty()
+          && !"admin".equals(uriDb)) {
+        databaseName = uriDb;
+        System.err.println("using URI database name: " + databaseName);
+      } else {
+        // If no database is specified in URI, use "ycsb"
+        System.err.println("using default database name: ycsb");
+        databaseName = "ycsb";
+      }
+
       try {
-        MongoClientURI uri = new MongoClientURI(url);
-
-        String uriDb = uri.getDatabase();
-        if (!defaultedUrl && (uriDb != null) && !uriDb.isEmpty()
-            && !"admin".equals(uriDb)) {
-          databaseName = uriDb;
-        } else {
-          // If no database is specified in URI, use "ycsb"
-          databaseName = "ycsb";
-
-        }
-
-        readPreference = uri.getOptions().getReadPreference();
-        writeConcern = uri.getOptions().getWriteConcern();
-
-        mongoClient = new MongoClient(uri);
+        mongoClient = MongoClients.create(settingsBuilder.build());
         database =
             mongoClient.getDatabase(databaseName)
                 .withReadPreference(readPreference)
                 .withWriteConcern(writeConcern);
-
         System.out.println("mongo client connection created with " + url);
       } catch (Exception e1) {
         System.err
@@ -234,9 +295,57 @@ public class MongoDbClient extends DB {
         e1.printStackTrace();
         return;
       }
+      List<BsonValue> indexes = getIndexList(props);
+      setIndexes(props, indexes, database);
+      useTypedFields = "true".equalsIgnoreCase(props.getProperty(TYPED_FIELDS_PROPERTY));
     }
   }
 
+  private Document buildLegacyDocument(String key, List<DatabaseField> values) {
+      Document toInsert = new Document("_id", key);
+      for (DatabaseField field : values) {
+        toInsert.put(
+          field.getFieldname(), 
+          field.getContent().asIterator().toArray());
+      }
+      return toInsert;
+  }
+
+  private void fillDocument(DatabaseField field, Document toInsert) {
+    DataWrapper wrapper = field.getContent();
+      Object content = null;
+      if(wrapper.isTerminal() || wrapper.isArray()) {
+        // this WILL BREAK if content is a nested
+        // document within the array
+        content = wrapper.asObject();
+      } else if(wrapper.isNested()) {
+        Document inner = new Document();
+        List<DatabaseField> innerFields = wrapper.asNested();
+        for(DatabaseField iF : innerFields) {
+          fillDocument(iF, inner);
+        }
+        content = inner;
+      } else {
+        throw new IllegalStateException("neither terminal, nor array, nor nested");
+      }
+      toInsert.put(
+        field.getFieldname(),
+        content
+      );
+  }
+
+  private Document buildKeylessTypedDocument(List<DatabaseField> values) {
+    Document toInsert = new Document();
+    for (DatabaseField field : values) {
+      fillDocument(field, toInsert);
+    }
+    return toInsert;
+  }
+  private Document buildTypedDocument(String key, List<DatabaseField> values) {
+    Document toInsert = buildKeylessTypedDocument(values);
+    toInsert.put("_id", key);
+    return toInsert;
+  }
   /**
    * Insert a record in the database. Any field/value pairs in the specified
    * values HashMap will be written into the record with the specified record
@@ -252,15 +361,12 @@ public class MongoDbClient extends DB {
    *         class's description for a discussion of error codes.
    */
   @Override
-  public Status insert(String table, String key,
-      Map<String, ByteIterator> values) {
+  public Status insert(String table, String key, List<DatabaseField> values) {
+    final Document toInsert = useTypedFields
+      ? buildTypedDocument(key, values)
+      : buildLegacyDocument(key, values);
     try {
       MongoCollection<Document> collection = database.getCollection(table);
-      Document toInsert = new Document("_id", key);
-      for (Map.Entry<String, ByteIterator> entry : values.entrySet()) {
-        toInsert.put(entry.getKey(), entry.getValue().toArray());
-      }
-
       if (batchSize == 1) {
         if (useUpsert) {
           // this is effectively an insert, but using an upsert instead due
@@ -273,34 +379,67 @@ public class MongoDbClient extends DB {
         }
       } else {
         bulkInserts.add(toInsert);
-        if (bulkInserts.size() == batchSize) {
+        if (bulkInserts.size() >= batchSize) {
+          List<Document> local = new ArrayList<>(bulkInserts);
+          bulkInserts.clear();
           if (useUpsert) {
             List<UpdateOneModel<Document>> updates = 
-                new ArrayList<UpdateOneModel<Document>>(bulkInserts.size());
-            for (Document doc : bulkInserts) {
+                new ArrayList<UpdateOneModel<Document>>(local.size());
+            for (Document doc : local) {
               updates.add(new UpdateOneModel<Document>(
                   new Document("_id", doc.get("_id")),
                   doc, UPDATE_WITH_UPSERT));
             }
             collection.bulkWrite(updates);
           } else {
-            collection.insertMany(bulkInserts, INSERT_UNORDERED);
+            collection.insertMany(local, INSERT_UNORDERED);
           }
-          bulkInserts.clear();
         } else {
           return Status.BATCHED_OK;
         }
       }
       return Status.OK;
     } catch (Exception e) {
-      System.err.println("Exception while trying bulk insert with "
-          + bulkInserts.size());
+      if(debug) {
+        System.err.println("Exception while trying bulk insert with " + bulkInserts.size());
+        e.printStackTrace();
+      }
+      return Status.ERROR;
+    }
+  }
+
+  @Override
+  public Status findOne(String table, List<Comparison> filters,
+      Set<String> fields, Map<String, ByteIterator> result) {
+    if(filters == null || filters.size() == 0) {
+      throw new NullPointerException();
+    }
+    // FIXME: this implementation does not support reading specific fields
+    if(fields != null) {
+      throw new UnsupportedOperationException("cannot read results by field");
+    }
+    // building the filter
+    Bson query = FilterBuilder.buildConcatenatedFilter(filters);
+    try {
+      MongoCollection<Document> collection = database.getCollection(table);
+      Document queryResult = collection.find(query).first();
+      if (queryResult != null) {
+        fillMap(result, queryResult);
+        return Status.OK;
+      }
+      if(debug) {
+        System.err.println("NOT FOUND: " + filters);
+      }
+      return Status.NOT_FOUND;
+    } catch (Exception e) {
+      System.err.println("Exception while findOne");
       e.printStackTrace();
       return Status.ERROR;
     }
-
   }
+  /*private Status findOneByFilter(String table) {
 
+  }*/
   /**
    * Read a record from the database. Each field/value pair from the result will
    * be stored in a HashMap.
@@ -387,7 +526,9 @@ public class MongoDbClient extends DB {
       cursor = findIterable.iterator();
 
       if (!cursor.hasNext()) {
-        System.err.println("Nothing found in scan for key " + startkey);
+        if(debug) {
+          System.err.println("Nothing found in scan for key " + startkey);
+        }
         return Status.ERROR;
       }
 
@@ -443,7 +584,9 @@ public class MongoDbClient extends DB {
 
       UpdateResult result = collection.updateOne(query, update);
       if (result.wasAcknowledged() && result.getMatchedCount() == 0) {
-        System.err.println("Nothing updated for key " + key);
+        if(debug) {
+          System.err.println("Nothing updated for key " + key);
+        }
         return Status.NOT_FOUND;
       }
       return Status.OK;
@@ -453,6 +596,32 @@ public class MongoDbClient extends DB {
     }
   }
 
+  @Override
+  public Status updateOne(String table, List<Comparison> filters, List<DatabaseField> fields) {
+    if(filters == null || filters.size() == 0) {
+      throw new NullPointerException();
+    }
+    if(fields == null || fields.size() == 0) {
+      throw new NullPointerException();
+    }
+    // building the filter
+    Bson query = FilterBuilder.buildConcatenatedFilter(filters);
+    Document update = new Document("$set", buildKeylessTypedDocument(fields));
+    try {
+      MongoCollection<Document> collection = database.getCollection(table);
+      UpdateResult queryResult = collection.updateOne(query, update);
+      if (queryResult.wasAcknowledged() && queryResult.getMatchedCount() == 0) {
+        if(debug) {
+          System.err.println("Nothing updated for filters " + filters);
+        }
+        return Status.NOT_FOUND;
+      }
+      return Status.OK;
+    } catch (Exception e) {
+      System.err.println(e.toString());
+      return Status.ERROR;
+    }
+  }
   /**
    * Fills the map with the values from the DBObject.
    * 

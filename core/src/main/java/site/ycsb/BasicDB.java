@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2010-2016 Yahoo! Inc., 2017 YCSB contributors All rights reserved.
+ * Copyright (c) 2023 - 2024 benchANT GmbH. All rights reserved.
  * <p>
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
@@ -17,17 +18,28 @@
 
 package site.ycsb;
 
-import java.util.*;
-import java.util.Map.Entry;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Enumeration;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
+import java.util.Properties;
+import java.util.Set;
+import java.util.TreeMap;
+import java.util.Vector;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.LockSupport;
 
+import site.ycsb.wrappers.Comparison;
+import site.ycsb.wrappers.DatabaseField;
+
 /**
  * Basic DB that just prints out the requested operations, instead of doing them against a database.
  */
-public class BasicDB extends DB {
+public class BasicDB extends DB implements IndexableDB {
   public static final String COUNT = "basicdb.count";
   public static final String COUNT_DEFAULT = "false";
   
@@ -47,6 +59,7 @@ public class BasicDB extends DB {
   protected static Map<Integer, Integer> updates;
   protected static Map<Integer, Integer> inserts;
   protected static Map<Integer, Integer> deletes;
+  protected static Map<Integer, Integer> finds;
   
   protected boolean verbose;
   protected boolean randomizedelay;
@@ -106,6 +119,7 @@ public class BasicDB extends DB {
         updates = new HashMap<Integer, Integer>();
         inserts = new HashMap<Integer, Integer>();
         deletes = new HashMap<Integer, Integer>();
+        finds = new HashMap<Integer, Integer>();
       }
       counter++;
     }
@@ -220,7 +234,7 @@ public class BasicDB extends DB {
     }
 
     if (count) {
-      incCounter(updates, hash(table, key, values));
+      incCounter(updates, oldHash(table, key, values));
     }
     
     return Status.OK;
@@ -235,15 +249,16 @@ public class BasicDB extends DB {
    * @param values A HashMap of field/value pairs to insert in the record
    * @return Zero on success, a non-zero error code on error
    */
-  public Status insert(String table, String key, Map<String, ByteIterator> values) {
+  public Status insert(String table, String key, List<DatabaseField> values) {
     delay();
 
     if (verbose) {
       StringBuilder sb = getStringBuilder();
       sb.append("INSERT ").append(table).append(" ").append(key).append(" [ ");
       if (values != null) {
-        for (Map.Entry<String, ByteIterator> entry : values.entrySet()) {
-          sb.append(entry.getKey()).append("=").append(entry.getValue()).append(" ");
+        for (DatabaseField field : values) {
+        // for (Map.Entry<String, ByteIterator> entry : values.entrySet()) {
+          sb.append(field.getFieldname()).append("=").append(field.getContent().asIterator()).append(" ");
         }
       }
 
@@ -252,7 +267,7 @@ public class BasicDB extends DB {
     }
 
     if (count) {
-      incCounter(inserts, hash(table, key, values));
+      incCounter(inserts, hashWithDatabaseField(table, key, values));
     }
     
     return Status.OK;
@@ -347,7 +362,7 @@ public class BasicDB extends DB {
    * @param values The values to hash on.
    * @return The hash code.
    */
-  protected int hash(final String table, final String key, final Map<String, ByteIterator> values) {
+  protected int oldHash(final String table, final String key, final Map<String, ByteIterator> values) {
     if (values == null) {
       return (table + key).hashCode();
     }
@@ -362,7 +377,80 @@ public class BasicDB extends DB {
     }
     return buf.toString().hashCode();
   }
+
+  protected int hash(final String table, final String key, final List<Comparison> values) {
+    if (values == null) {
+      return (table + key).hashCode();
+    }
+    List<Comparison> sorted = new ArrayList<>(values);
+    sorted.sort((el1, el2) -> { return el1.getFieldname().compareTo(el2.getFieldname()); });
+    
+    StringBuilder buf = getStringBuilder().append(table).append(key);
+    for (final Comparison field : sorted) {
+      buf.append(field.getFieldname())
+         .append(field.getContentAsString());
+    }
+    return buf.toString().hashCode();
+  }
+
+  protected int hashWithDatabaseField(final String table, final String key, final List<DatabaseField> values) {
+    if (values == null) {
+      return (table + key).hashCode();
+    }
+    List<DatabaseField> sorted = new ArrayList<>(values);
+    sorted.sort((el1, el2) -> { return el1.getFieldname().compareTo(el2.getFieldname()); });
+    
+    StringBuilder buf = getStringBuilder().append(table).append(key);
+    for (final DatabaseField field : sorted) {
+      ByteIterator b = field.getContent().asIterator();
+      b.reset();
+      buf.append(field.getFieldname())
+         .append(b.toString());
+    }
+    return buf.toString().hashCode();
+  }
   
+  /**
+   * Find a record from the database.
+   *
+   * @param table The name of the table
+   * @param key   The values for the filter
+   */
+  @Override
+  public Status findOne(String table, List<Comparison> filters,
+    Set<String> fields, Map<String, ByteIterator> result) {
+    delay();
+
+    if (verbose) {
+      StringBuilder sb = getStringBuilder();
+      sb.append("FINDONE ").append(table).append(" ").append(filters)
+        .append(" -> ").append(fields);
+      System.out.println(sb);
+    }
+
+    if (count) {
+      incCounter(finds, hash(table, "", filters));
+    }
+    
+    return Status.OK;
+  }
+
+  @Override
+  public Status updateOne(String table, List<Comparison> filters, List<DatabaseField> fields) {
+    delay();
+    if (verbose) {
+      StringBuilder sb = getStringBuilder();
+      sb.append("UPDATEONE ").append(table).append(" ").append(filters)
+        .append(" -> ").append(fields);
+      System.out.println(sb);
+    }
+
+    if (count) {
+      incCounter(finds, hash(table, "", filters));
+    }
+    
+    return Status.OK;
+  }
   /**
    * Short test of BasicDB
    */

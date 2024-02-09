@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2010 - 2016 Yahoo! Inc., 2016, 2019 YCSB contributors. All rights reserved.
+ * Copyright 2023-2024 benchANT GmbH. All Rights Reserved.
  *
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
@@ -18,6 +19,7 @@ package site.ycsb.db;
 
 import site.ycsb.DB;
 import site.ycsb.DBException;
+import site.ycsb.IndexableDB;
 import site.ycsb.ByteIterator;
 import site.ycsb.Status;
 import site.ycsb.StringByteIterator;
@@ -26,7 +28,14 @@ import java.sql.*;
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+
 import site.ycsb.db.flavors.DBFlavor;
+import site.ycsb.workloads.core.CoreConstants;
+import site.ycsb.wrappers.Comparison;
+import site.ycsb.wrappers.DataWrapper;
+import site.ycsb.wrappers.DatabaseField;
+
+import static site.ycsb.db.JdbcDBConstants.*;
 
 /**
  * A class that wraps a JDBC compliant database to allow it to be interfaced
@@ -42,46 +51,21 @@ import site.ycsb.db.flavors.DBFlavor;
  * attributes are of type TEXT. All accesses are through the primary key.
  * Therefore, only one index on the primary key is needed.
  */
-public class JdbcDBClient extends DB {
+public class JdbcDBClient extends DB implements IndexableDB {
+  static class IndexDescriptor {
+    String name;
+    String method;
+    String order;
+    boolean concurrent;
+    List<String> columnNames = new ArrayList<>();
+  }
 
-  /** The class to use as the jdbc driver. */
-  public static final String DRIVER_CLASS = "db.driver";
-
-  /** The URL to connect to the database. */
-  public static final String CONNECTION_URL = "db.url";
-
-  /** The user name to use to connect to the database. */
-  public static final String CONNECTION_USER = "db.user";
-
-  /** The password to use for establishing the connection. */
-  public static final String CONNECTION_PASSWD = "db.passwd";
-
-  /** The batch size for batched inserts. Set to >0 to use batching */
-  public static final String DB_BATCH_SIZE = "db.batchsize";
-
-  /** The JDBC fetch size hinted to the driver. */
-  public static final String JDBC_FETCH_SIZE = "jdbc.fetchsize";
-
-  /** The JDBC connection auto-commit property for the driver. */
-  public static final String JDBC_AUTO_COMMIT = "jdbc.autocommit";
-
-  public static final String JDBC_BATCH_UPDATES = "jdbc.batchupdateapi";
-
-  /** The name of the property for the number of fields in a record. */
-  public static final String FIELD_COUNT_PROPERTY = "fieldcount";
-
-  /** Default number of fields in a record. */
-  public static final String FIELD_COUNT_PROPERTY_DEFAULT = "10";
-
-  /** Representing a NULL value. */
-  public static final String NULL_VALUE = "NULL";
-
-  /** The primary key in the user table. */
-  public static final String PRIMARY_KEY = "YCSB_KEY";
-
-  /** The field name prefix in the table. */
-  public static final String COLUMN_PREFIX = "FIELD";
-
+  static enum TableInitStatus {
+    ERROR,
+    COMPLETE,
+    VOID,
+  }
+  private static volatile TableInitStatus tableInitStatus = TableInitStatus.VOID;
   /** SQL:2008 standard: FETCH FIRST n ROWS after the ORDER BY. */
   private boolean sqlansiScans = false;
   /** SQL Server before 2012: TOP n after the SELECT. */
@@ -100,9 +84,11 @@ public class JdbcDBClient extends DB {
   /** DB flavor defines DB-specific syntax and behavior for the
    * particular database. Current database flavors are: {default, phoenix} */
   private DBFlavor dbFlavor;
-
+  private static boolean useTypedFields;
+  static boolean debug = false;
   /**
    * Ordered field information for insert and update statements.
+   * only used for untyped version of this driver
    */
   private static class OrderedFieldInfo {
     private String fieldKeys;
@@ -183,6 +169,7 @@ public class JdbcDBClient extends DB {
       return;
     }
     props = getProperties();
+    int timeout = Integer.parseInt(props.getProperty(CONNECTION_TIMEOUT_PROPERTY, CONNECTION_TIMEOUT_DEFAULT));
     String urls = props.getProperty(CONNECTION_URL, DEFAULT_PROP);
     String user = props.getProperty(CONNECTION_USER, DEFAULT_PROP);
     String passwd = props.getProperty(CONNECTION_PASSWD, DEFAULT_PROP);
@@ -223,6 +210,10 @@ public class JdbcDBClient extends DB {
       final String[] urlArr = urls.split(";");
       for (String url : urlArr) {
         System.out.println("Adding shard node URL: " + url);
+        if(timeout > -1) {
+          System.out.println("setting timeout to: " + timeout);
+          DriverManager.setLoginTimeout(timeout);
+        }
         Connection conn = DriverManager.getConnection(url, user, passwd);
 
         // Since there is no explicit commit method in the DB interface, all
@@ -250,9 +241,40 @@ public class JdbcDBClient extends DB {
       System.err.println("Invalid value for fieldcount property. " + e);
       throw new DBException(e);
     }
-
+    boolean initDb = "true".equalsIgnoreCase(props.getProperty(JDBC_INIT_TABLE, "false"));
+    useTypedFields = "true".equalsIgnoreCase(props.getProperty(TYPED_FIELDS_PROPERTY));
+    List<IndexDescriptor> indexes = JdbcDBInitHelper.getIndexList(getProperties());
+    final String table = props.getProperty(CoreConstants.TABLENAME_PROPERTY, CoreConstants.TABLENAME_PROPERTY_DEFAULT);
+    synchronized(JdbcDBClient.class) {
+      debug = Boolean.parseBoolean(getProperties().getProperty("debug", "false"));
+      if(tableInitStatus == TableInitStatus.ERROR) {
+        throw new IllegalStateException("table initialization or index creation failed, terminating");
+      }
+      if(tableInitStatus == TableInitStatus.VOID) {
+        // it is our task to init the table
+        try {
+          if(initDb) {
+            JdbcDBInitHelper.createDbAndSchema(table, conns);
+          }
+          // build indexes only once, but once per connection
+          List<String> indexCommands = JdbcDBInitHelper.buildIndexCommands(table, indexes);
+          for(Connection c : conns) {
+            for(String cmd : indexCommands) {
+              Statement stmt = c.createStatement();
+              int ret = stmt.executeUpdate(cmd);
+              System.out.println("created index: " + cmd + ": " + "/" + ret);
+            }
+          }
+          tableInitStatus = TableInitStatus.COMPLETE;
+        } catch(SQLException ex) {
+          tableInitStatus = TableInitStatus.ERROR;
+          throw new IllegalStateException("could not create table or indexes, terminating", ex);
+        }
+      }
+    }
     initialized = true;
   }
+
 
   @Override
   public void cleanup() throws DBException {
@@ -300,6 +322,79 @@ public class JdbcDBClient extends DB {
     return stmt;
   }
 
+  private final ConcurrentHashMap<UpdateContainer, PreparedStatement> UPDATE_ONE_STATEMENTS = new ConcurrentHashMap<>();
+  static final class UpdateContainer {
+    final List<Comparison> filters;
+    final Set<String> field;
+    public UpdateContainer(List<Comparison> filters, Set<String> field) {
+      this.filters = filters;
+      this.field = field;
+    }
+    @Override
+    public int hashCode() {
+      final int prime = 31;
+      int result = 1;
+      result = prime * result + ((filters == null) ? 0 : filters.hashCode());
+      result = prime * result + ((field == null) ? 0 : field.hashCode());
+      return result;
+    }
+    @Override
+    public boolean equals(Object obj) {
+      if (this == obj)
+        return true;
+      if (obj == null)
+        return false;
+      if (getClass() != obj.getClass())
+        return false;
+      UpdateContainer other = (UpdateContainer) obj;
+      if (filters == null) {
+        if (other.filters != null)
+          return false;
+      } else if (!filters.equals(other.filters))
+        return false;
+      if (field == null) {
+        if (other.field != null)
+          return false;
+      } else if (!field.equals(other.field))
+        return false;
+      return true;
+    }
+    
+  }
+  private PreparedStatement createAndCacheUpdateOneStatement(
+      String tablename, List<Comparison> filters, List<DatabaseField> fields)
+      throws SQLException {
+    final List<Comparison> normalizedFilters = new ArrayList<>();
+    for(Comparison c : filters) {
+      normalizedFilters.add(c.normalized());
+    }
+    final Set<String> updates = new HashSet<>();
+    for(DatabaseField f: fields) {
+      if(f.getContent().isTerminal()) {
+        updates.add(f.getFieldname());
+      } else {
+        throw new IllegalStateException("non-terminals not supported");
+      }
+    }
+    UpdateContainer container = new UpdateContainer(normalizedFilters, updates);
+    PreparedStatement ret = UPDATE_ONE_STATEMENTS.get(container);
+    if(ret != null) return ret;
+    if(debug){
+      System.err.println("updateOne query not found: creating it");
+    }
+    String query = JdbcQueryHelper.createUpdateOneStatement(tablename, filters, fields);
+    synchronized(UPDATE_ONE_STATEMENTS) {
+      ret = UPDATE_ONE_STATEMENTS.get(container);
+      if(ret != null) return ret;
+      PreparedStatement prepStatement = conns.get(0).prepareStatement(query);
+      ret = UPDATE_ONE_STATEMENTS.putIfAbsent(container, prepStatement);
+      if (ret == null) {
+        ret = prepStatement;
+      }
+    }
+    return ret;
+  }
+
   private PreparedStatement createAndCacheDeleteStatement(StatementType deleteType, String key)
       throws SQLException {
     String delete = dbFlavor.createDeleteStatement(deleteType, key);
@@ -309,6 +404,35 @@ public class JdbcDBClient extends DB {
       return deleteStatement;
     }
     return stmt;
+  }
+
+  private final ConcurrentHashMap<List<Comparison>, PreparedStatement> FIND_ONE_STATEMENTS = new ConcurrentHashMap<>();
+  private PreparedStatement createAndCacheFindOneStatement(
+      String tablename, List<Comparison> filters, Set<String> fields)
+      throws SQLException {
+    if(fields != null) {
+      throw new IllegalStateException("reading specific fields currently not supported by this driver");
+    }
+    final List<Comparison> normalizedFilters = new ArrayList<>();
+    for(Comparison c : filters) {
+      normalizedFilters.add(c.normalized());
+    }
+    PreparedStatement ret = FIND_ONE_STATEMENTS.get(normalizedFilters);
+    if(ret != null) return ret;
+    if(debug){
+      System.err.println("findOne query not found: creating it");
+    }
+    String query = JdbcQueryHelper.createFindOneStatement(tablename, filters, fields);
+    synchronized(FIND_ONE_STATEMENTS) {
+      ret = FIND_ONE_STATEMENTS.get(normalizedFilters);
+      if(ret != null) return ret;
+      PreparedStatement prepStatement = conns.get(0).prepareStatement(query);
+      ret = FIND_ONE_STATEMENTS.putIfAbsent(normalizedFilters, prepStatement);
+      if (ret == null) {
+        ret = prepStatement;
+      }
+    }
+    return ret;
   }
 
   private PreparedStatement createAndCacheUpdateStatement(StatementType updateType, String key)
@@ -427,22 +551,60 @@ public class JdbcDBClient extends DB {
       return Status.ERROR;
     }
   }
-
+  private void buildTypedQuery(PreparedStatement insertStatement, List<DatabaseField> values) throws SQLException {
+    int index = 1;
+    for (DatabaseField value: values) {
+      // increase index count immediately
+      // as index 1 has already been taken
+      index++;
+      DataWrapper w = value.getContent();
+      if(w.isTerminal()) {
+        if(w.isInteger()) {
+          insertStatement.setInt(index, w.asInteger());
+        } else if(w.isLong()) {
+          insertStatement.setLong(index, w.asLong());
+        } else if(w.isString()) {
+          insertStatement.setString(index, w.asString());
+        } else {
+          // assuming this is an iterator
+          // which is the only remaining terminal
+          Object o = w.asObject();
+          byte[] b = (byte[]) o;
+          insertStatement.setString(index, new String(b));
+        }
+      } else if(w.isArray()) {
+        throw new UnsupportedOperationException("array type columns not supported (yet)");
+      } else if(w.isNested()) {
+        throw new UnsupportedOperationException("nested type columns not supported (yet)");
+      } else {
+        // do nothing; something broke that we ignore for now
+      }
+    }
+  }
+  private void buildLegacyQuery(PreparedStatement insertStatement, List<DatabaseField> values) throws SQLException {
+    int index = 2;
+    for (DatabaseField value: values) {
+      String v = value.getContent().asIterator().toString();
+      insertStatement.setString(index++, v);
+    }
+  }
   @Override
-  public Status insert(String tableName, String key, Map<String, ByteIterator> values) {
+  public Status insert(String tableName, String key, List<DatabaseField> values) {
     try {
       int numFields = values.size();
-      OrderedFieldInfo fieldInfo = getFieldInfo(values);
+      String fieldNameString = getFieldNameString(values);
       StatementType type = new StatementType(StatementType.Type.INSERT, tableName,
-          numFields, fieldInfo.getFieldKeys(), getShardIndexByKey(key));
+          numFields, fieldNameString, getShardIndexByKey(key));
       PreparedStatement insertStatement = cachedStatements.get(type);
       if (insertStatement == null) {
         insertStatement = createAndCacheInsertStatement(type, key);
       }
       insertStatement.setString(1, key);
-      int index = 2;
-      for (String value: fieldInfo.getFieldValues()) {
-        insertStatement.setString(index++, value);
+      
+      if(useTypedFields) {
+        buildTypedQuery(insertStatement, values);
+      } else {
+        buildLegacyQuery(insertStatement, values);
       }
       // Using the batch insert API
       if (batchUpdates) {
@@ -509,12 +671,20 @@ public class JdbcDBClient extends DB {
       if (result == 1) {
         return Status.OK;
       }
+      if(result == 0) {
+        return Status.NOT_FOUND;
+      }
       return Status.UNEXPECTED_STATE;
     } catch (SQLException e) {
       System.err.println("Error in processing delete to table: " + tableName + e);
       return Status.ERROR;
     }
   }
+    private String getFieldNameString(List<DatabaseField> values) {
+      List<String> els = new ArrayList<>();
+      values.forEach(v -> els.add(v.getFieldname()));
+      return String.join(",", els);
+    }
 
   private OrderedFieldInfo getFieldInfo(Map<String, ByteIterator> values) {
     String fieldKeys = "";
@@ -530,5 +700,57 @@ public class JdbcDBClient extends DB {
     }
 
     return new OrderedFieldInfo(fieldKeys, fieldValues);
+  }
+@Override
+  public Status findOne(String tableName, List<Comparison> filters, Set<String> fields,
+      Map<String, ByteIterator> result) {
+    if(!useTypedFields) {
+      throw new IllegalStateException("only works with typed fields");
+    }
+    if(fields != null) {
+      throw new IllegalStateException("reading specific fields currently not supported by this driver");
+    }
+    try {
+      PreparedStatement statement = createAndCacheFindOneStatement(tableName, filters, fields);
+      JdbcQueryHelper.bindFindOneStatement(statement, filters, fields);
+      ResultSet resultSet = statement.executeQuery();
+      if (!resultSet.next()) {
+        resultSet.close();
+        return Status.NOT_FOUND;
+      }
+      FilterBuilder.drainTypedResult(resultSet, result);
+      if(resultSet.next()) {
+        System.err.println("Error in processing find of table " + tableName + ": too many results");
+        resultSet.close();
+        return Status.ERROR;
+      }
+      resultSet.close();
+      return Status.OK;
+    } catch (SQLException e) {
+      System.err.println("Error in processing find on table: " + tableName + e);
+      e.printStackTrace(System.err);
+      return Status.ERROR;
+    }
+  }
+  @Override
+  public Status updateOne(String table, List<Comparison> filters, List<DatabaseField> fields) {
+    if(!useTypedFields) {
+      throw new IllegalStateException("only works with typed fields");
+    }
+    try {
+      PreparedStatement statement = createAndCacheUpdateOneStatement(table, filters, fields);
+      JdbcQueryHelper.bindUpdateOneStatement(statement, filters, fields);
+      int resultSet = statement.executeUpdate();
+      if (resultSet == 0) {
+        return Status.NOT_FOUND;
+      }
+      if (resultSet > 1) {
+        return Status.UNEXPECTED_STATE;
+      }
+      return Status.OK;
+    } catch (SQLException e) {
+      System.err.println("Error in processing update on table: " + table + e);
+      return Status.ERROR;
+    }
   }
 }

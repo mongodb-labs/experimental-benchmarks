@@ -16,6 +16,8 @@
  */
 package site.ycsb.db.flavors;
 
+import static site.ycsb.db.JdbcDBConstants.PRIMARY_KEY;
+
 import site.ycsb.db.JdbcDBClient;
 import site.ycsb.db.StatementType;
 
@@ -32,7 +34,7 @@ public class PhoenixDBFlavor extends DefaultDBFlavor {
     // Phoenix uses UPSERT syntax
     StringBuilder insert = new StringBuilder("UPSERT INTO ");
     insert.append(insertType.getTableName());
-    insert.append(" (" + JdbcDBClient.PRIMARY_KEY + "," + insertType.getFieldString() + ")");
+    insert.append(" (" + PRIMARY_KEY + "," + insertType.getFieldString() + ")");
     insert.append(" VALUES(?");
     for (int i = 0; i < insertType.getNumFields(); i++) {
       insert.append(",?");
@@ -53,7 +55,7 @@ public class PhoenixDBFlavor extends DefaultDBFlavor {
       update.append(fieldKeys[i]).append(",");
     }
     // And then set the primary key column
-    update.append(JdbcDBClient.PRIMARY_KEY).append(") VALUES(");
+    update.append(PRIMARY_KEY).append(") VALUES(");
     // Add an unbound param for each column to update
     for (int i = 0; i < fieldKeys.length; i++) {
       update.append("?, ");

@@ -17,6 +17,7 @@
 package site.ycsb.db.flavors;
 
 import site.ycsb.db.JdbcDBClient;
+import site.ycsb.db.JdbcDBConstants;
 import site.ycsb.db.StatementType;
 
 /**
@@ -34,7 +35,7 @@ public class DefaultDBFlavor extends DBFlavor {
   public String createInsertStatement(StatementType insertType, String key) {
     StringBuilder insert = new StringBuilder("INSERT INTO ");
     insert.append(insertType.getTableName());
-    insert.append(" (" + JdbcDBClient.PRIMARY_KEY + "," + insertType.getFieldString() + ")");
+    insert.append(" (" + JdbcDBConstants.PRIMARY_KEY + "," + insertType.getFieldString() + ")");
     insert.append(" VALUES(?");
     for (int i = 0; i < insertType.getNumFields(); i++) {
       insert.append(",?");
@@ -48,7 +49,7 @@ public class DefaultDBFlavor extends DBFlavor {
     StringBuilder read = new StringBuilder("SELECT * FROM ");
     read.append(readType.getTableName());
     read.append(" WHERE ");
-    read.append(JdbcDBClient.PRIMARY_KEY);
+    read.append(JdbcDBConstants.PRIMARY_KEY);
     read.append(" = ");
     read.append("?");
     return read.toString();
@@ -59,7 +60,7 @@ public class DefaultDBFlavor extends DBFlavor {
     StringBuilder delete = new StringBuilder("DELETE FROM ");
     delete.append(deleteType.getTableName());
     delete.append(" WHERE ");
-    delete.append(JdbcDBClient.PRIMARY_KEY);
+    delete.append(JdbcDBConstants.PRIMARY_KEY);
     delete.append(" = ?");
     return delete.toString();
   }
@@ -78,7 +79,7 @@ public class DefaultDBFlavor extends DBFlavor {
       }
     }
     update.append(" WHERE ");
-    update.append(JdbcDBClient.PRIMARY_KEY);
+    update.append(JdbcDBConstants.PRIMARY_KEY);
     update.append(" = ?");
     return update.toString();
   }
@@ -93,10 +94,10 @@ public class DefaultDBFlavor extends DBFlavor {
     }
     select.append(scanType.getTableName());
     select.append(" WHERE ");
-    select.append(JdbcDBClient.PRIMARY_KEY);
+    select.append(JdbcDBConstants.PRIMARY_KEY);
     select.append(" >= ?");
     select.append(" ORDER BY ");
-    select.append(JdbcDBClient.PRIMARY_KEY);
+    select.append(JdbcDBConstants.PRIMARY_KEY);
     if (!sqlserverScans) {
       if (sqlansiScans) {
         select.append(" FETCH FIRST ? ROWS ONLY");

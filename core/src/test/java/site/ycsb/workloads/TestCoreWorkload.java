@@ -23,18 +23,20 @@ import java.util.Properties;
 import org.testng.annotations.Test;
 
 import site.ycsb.generator.DiscreteGenerator;
+import site.ycsb.workloads.core.CoreHelper;
+import static site.ycsb.workloads.core.CoreConstants.*;
 
 public class TestCoreWorkload {
 
   @Test
   public void createOperationChooser() {
     final Properties p = new Properties();
-    p.setProperty(CoreWorkload.READ_PROPORTION_PROPERTY, "0.20");
-    p.setProperty(CoreWorkload.UPDATE_PROPORTION_PROPERTY, "0.20");
-    p.setProperty(CoreWorkload.INSERT_PROPORTION_PROPERTY, "0.20");
-    p.setProperty(CoreWorkload.SCAN_PROPORTION_PROPERTY, "0.20");
-    p.setProperty(CoreWorkload.READMODIFYWRITE_PROPORTION_PROPERTY, "0.20");
-    final DiscreteGenerator generator = CoreWorkload.createOperationGenerator(p);
+    p.setProperty(READ_PROPORTION_PROPERTY, "0.20");
+    p.setProperty(UPDATE_PROPORTION_PROPERTY, "0.20");
+    p.setProperty(INSERT_PROPORTION_PROPERTY, "0.20");
+    p.setProperty(SCAN_PROPORTION_PROPERTY, "0.20");
+    p.setProperty(READMODIFYWRITE_PROPORTION_PROPERTY, "0.20");
+    final DiscreteGenerator generator = CoreHelper.createOperationGenerator(p);
     final int[] counts = new int[5];
     
     for (int i = 0; i < 100; ++i) {
@@ -65,6 +67,6 @@ public class TestCoreWorkload {
   
   @Test (expectedExceptions = IllegalArgumentException.class)
   public void createOperationChooserNullProperties() {
-    CoreWorkload.createOperationGenerator(null);
+    CoreHelper.createOperationGenerator(null);
   }
 }

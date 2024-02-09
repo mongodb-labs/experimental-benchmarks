@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2010 - 2016 Yahoo! Inc. All rights reserved.
+ * Copyright 2023-2024 benchANT GmbH. All Rights Reserved.
  * 
  * Licensed under the Apache License, Version 2.0 (the "License"); you 
  * may not use this file except in compliance with the License. You
@@ -40,10 +41,10 @@ public final class JdbcDBCli {
   }
 
   private static void executeCommand(Properties props, String sql) throws SQLException {
-    String driver = props.getProperty(JdbcDBClient.DRIVER_CLASS);
-    String username = props.getProperty(JdbcDBClient.CONNECTION_USER);
-    String password = props.getProperty(JdbcDBClient.CONNECTION_PASSWD, "");
-    String url = props.getProperty(JdbcDBClient.CONNECTION_URL);
+    String driver = props.getProperty(JdbcDBConstants.DRIVER_CLASS);
+    String username = props.getProperty(JdbcDBConstants.CONNECTION_USER);
+    String password = props.getProperty(JdbcDBConstants.CONNECTION_PASSWD, "");
+    String url = props.getProperty(JdbcDBConstants.CONNECTION_URL);
     if (driver == null || username == null || url == null) {
       throw new SQLException("Missing connection information.");
     }

@@ -1,5 +1,6 @@
 /**
  * Copyright (c) 2010 Yahoo! Inc. All rights reserved.
+ * Copyright (c) 2023 - 2024 benchANT GmbH. All rights reserved. 
  * <p>
  * Licensed under the Apache License, Version 2.0 (the "License"); you
  * may not use this file except in compliance with the License. You
@@ -18,6 +19,9 @@
 package site.ycsb;
 
 import site.ycsb.workloads.CoreWorkload;
+import site.ycsb.workloads.core.CoreConstants;
+import site.ycsb.wrappers.ByteIteratorWrapper;
+import site.ycsb.wrappers.DatabaseField;
 
 import java.io.BufferedReader;
 import java.io.FileInputStream;
@@ -43,7 +47,7 @@ public final class CommandLine {
     System.out.println("  -p name=value: Specify a property value");
     System.out.println("  -db classname: Use a specified DB class (can also set the \"db\" property)");
     System.out.println("  -table tablename: Use the table name instead of the default \"" +
-        CoreWorkload.TABLENAME_PROPERTY_DEFAULT + "\"");
+        CoreConstants.TABLENAME_PROPERTY_DEFAULT + "\"");
     System.out.println();
   }
 
@@ -77,7 +81,7 @@ public final class CommandLine {
     System.out.println("Type \"help\" for command line help");
     System.out.println("Start with \"-help\" for usage info");
 
-    String table = props.getProperty(CoreWorkload.TABLENAME_PROPERTY, CoreWorkload.TABLENAME_PROPERTY_DEFAULT);
+    String table = props.getProperty(CoreConstants.TABLENAME_PROPERTY, CoreConstants.TABLENAME_PROPERTY_DEFAULT);
 
     //create a DB
     String dbname = props.getProperty(Client.DB_PROPERTY, DEFAULT_DB);
@@ -221,7 +225,7 @@ public final class CommandLine {
           usageMessage();
           System.exit(0);
         }
-        props.put(CoreWorkload.TABLENAME_PROPERTY, args[argindex]);
+        props.put(CoreConstants.TABLENAME_PROPERTY, args[argindex]);
 
         argindex++;
       } else {
@@ -254,11 +258,12 @@ public final class CommandLine {
     if (tokens.length < 3) {
       System.out.println("Error: syntax is \"insert keyname name1=value1 [name2=value2 ...]\"");
     } else {
-      HashMap<String, ByteIterator> values = new HashMap<>();
-
+      List<DatabaseField> values = new ArrayList<>();
       for (int i = 2; i < tokens.length; i++) {
         String[] nv = tokens[i].split("=");
-        values.put(nv[0], new StringByteIterator(nv[1]));
+        values.add(new DatabaseField(
+            nv[0], ByteIteratorWrapper.create(new StringByteIterator(nv[1])))
+          );
       }
 
       Status ret = db.insert(table, tokens[1], values);
